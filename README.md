@@ -1,2 +1,5 @@
-# LinuxKernelCourse
-My notes, homeworks and other files about my Linux Kernel Course from C and System Programmers Association.
+# What is this?
+This repository contains notes taken by me during the Linux Kernel Course by C and System Programmers Association. They are intended for educational and non-commercial usage.
+
+# License
+Everything in this repository is licensed under the [MIT License](LICENSE).  
