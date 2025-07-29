@@ -1,0 +1,201 @@
+Turing Awards (given by Association of Computing Machinery, ACM for short) is the Nobel Awards of computer science.
+
+To call a language programming language, the target (output of the compiler) must be machine language (direct CPU language) or
+symbolic machine language (assembly).
+
+Solaris (initially named SunOS) was developed by the company Sun, which was later acquired by Oracle. Oracle then open sourced
+Solaris as OpenSolaris.
+
+You can try to setup the Darwin kernel (macOS's kernel) on a VM. Open source version is called OpenDarwin.
+
+The word macOS is case sensitive? What does that even mean?
+
+Minix is the educational OS created by Andrew Tanenbaum as an open source project. Since it is developed as an educational OS, it is
+not very usable when it comes to commercial applications or other applications that require more stable/performant OSs.
+
+GNU Project
+-----------
+GNU Project is a product of the Free Software project, which has a website at fsf.org. The emphasis of the "Free" part isn't about
+price, it is about the freedom of the software.
+GNU Project is an OS project and there are a lot of other software (such as gcc and ld) developed while doing so which are still 
+widely used to this day. But GNU OS is potato at this point.
+There are a lot of open source licenses, part of them came from the GNU Project. Linux has a GPL license.
+Some of the open source licenses (such as GPL) require the user code to also be open sourced!!! Otherwise it can be a crime.
+Be careful about that!
+
+Free Software Project has 4 freedom principles:
+Freedom 0: Programi her turlu amac icin calistirma ozgurlugu
+Freedom 1: Programin kaynak kodunu inceleme ve degistirebilme ozgurlugu
+Freedom 2: Programin kopyalarini cikartabilme ve yeniden dagitabilme ozgurlugu
+Freedom 3: Programi iyilestirebilme ve iyilestirilmis programi yayinlama ozgurlugu
+
+LINUX
+-----
+Linux has a monolithic kernel and is mostly POSIX compliant.
+
+						     END OF THE HISTORY PART
+--------------------------------------------------------------------------------------------------------------------------------------
+
+LINUX KERNEL SOURCE CODE DIRECTORY STRUCTURE
+--------------------------------------------
+The directory structure of the kernel source code studied in this course will be based on a modern Linux kernel version (v6).
+
+Main directories:
+
+-arch => Short for architecture. Contains CPU architecture specific kernel codes. Each CPU family has its own subdirectory.
+-block => This directory used to be inside the "drivers" directory. This directory contains codes of the OS that perform block-level
+operations.
+-cert => This used to be under a different directory as well. This directory contains source codes related to certifications. This
+certification thing is driver certifications, kernel certifications and such. (Kernels require certificates to be loaded)
+-crypto => Source code for cryptography operations inside the kernel, such as file system and user password encryptions.
+-Documentation => Documentations for various subsystems.
+-drivers => This directory contains device drivers. While the kernel is being compiled, there is the option to include some of them
+and exclude the others. Just because the drivers are in the source code, doesn't mean the compiled kernel will have all of them. This
+is called configuring the kernel.
+-fs => The directory that has the kernel codes related to file systems. Which file systems the compiled kernel will support can also
+be chosen while the kernel is being compiled. Partitioning (such as mbr, guid, gpt) aren't included here, because they aren't related
+to kernel but the root file system. Kernel loads initramfs, which is the temporary root system.
+-include => The directory where every header file in the kernel resides. This directory has subdirectories for further categorization.
+-init => The codes required for the kernel to initialize itself can be found here. (The bootloader loads the kernel to RAM and leaves
+the execution to the kernel. Once that happens, the kernel need to initalize different things such as variable values, setting the
+clock etc.)
+-ipc (inter-process communication) => This directory was introduced later, it was initially inside the kernel directory. It contains
+ipc codes for operations such as pipes, message queues, etc.
+-kernel => This is the kernel of the kernel: the most core part of it. If you made a micro-kernel architecture, this directory would
+contain codes for that. This directory contains the most foundational codes of the kernel itself.
+-lib => Contains general utility functions that are used at a variety of places inside the kernel. The naming isn't very great as it
+suggests there are static/dynamic library files inside this directory; there aren't.
+-mm => All main memory management codes of the kernel live in here. These codes are used to control things like where things will
+live in memory, physical memory control etc.
+-net => All codes related to kernel's network system.
+-rust => As the Linux Kernel v6 came to be, the Rust programming language was also started to use inside the kernel. This directory
+has these Rust codes. At the time of the course (July 2025), Rust codes here have a very little percentage of usage (~0.1%).
+-samples => Sample codes about the subsystems are placed in here.
+-scripts => This folder contains scripts used during the compilation of the kernel. These scripts are mostly shell scripts.
+-security => Kernel codes for system security can be found here.
+-sound => Kernel codes for sound processes are here.
+-tools => The codes in this directory aren't directly kernel codes, but are codes for helper programs that are used during kernel
+development. These programs help with things like performance measurement, testing etc.
+-usr => Codes in this directory are related to the temporary root file system (initial ramdisk) and some user-mode tools. These codes
+are transferred to kernel codes in some systems via kernel configurations.
+-virt => This directory is related to the virtualization capabilities of the kernel.
+-io_uring => New async APIs added to Linux (which were in the kernel directory previously) are located in here. These are POSIX API
+alternatives that use a queue system. This directory was introduced in v5.1. (uring means user ring)
+
+Side note: IEEE754 is the standard for floating point operations performed inside the CPUs and modern CPUs obey to this standard.
+
+A Linux distribution can be defined as bundling a version of the kernel along with other open source programs (like user programs,
+window managers etc), a package manager and bringing it all together by creating an installation for the OS.
+
+CentOS is the most common Linux distrubution in servers (or at least used to be, Ubuntu is gaining popularity in servers). 
+
+The oldest Linux distro is Slackware, created first in 1993.
+
+POSIX: Portable Operating System Interface for UNIX
+---------------------------------------------------
+POSIX standards consist of 4 parts:
+1) Base Definitions: Main definitions of the standard
+2) Shell and Utilities : Shell commands and standard utility programs
+3) System Interfaces: POSIX functions for C programming
+4) Rationale: Explanation of the reasoning for the rules and ozellikler in the standard
+
+Single UNIX standards are for UNIX compliance. POSIX and Single UNIX standards used to be different but with the latest version,
+they became the same. If something is POSIX compliant, then it is also Single UNIX compliant.
+
+Linux is mostly, but not 100%, POSIX compliant.
+To use Windows as a POSIX compliant system, the Interix subsystem needed to be used. This was later removed from Windows, starting
+with Windows 8 because virtualization technology (WSL) got much better.
+
+NOTE TO SELF: Learn about databases. SQL-Lite is probably a good place to start.
+
+BOOTING OF AN OS
+----------------
+Loading the OS and bringing it into an executable state is called the boot process. This happens when the computer is first turned on.
+When power is given to MCUs (resetted), they start from a predefined address. This address is stored inside the "reset vector".
+There needs to be some code inside this address so that the execution can start. This code cannot be inside the DRAM because that also
+needs to be initialized when the computer is booting, which erases all of its contents. Therefore, this code is inside an
+EEPROM (flash EPROM). Similarly, some other hardware also need to be initialized before being ready for use.
+
+The pre-written codes inside the reset vector are genereally written by the hardware manufacturer. Since these are very foundational
+codes, these are called "BIOS (Basic Input/Output System)" or "firmware". BIOS or firmware codes typically do the following
+operations:
+-Initializing DRAM (SRAM doesn't need initialization)
+-Initializing CPU cores in multi-core systems (primary core does the processing, then the secondary cores becomes ready for
+processing as the software needs)
+-Detecting devices and peripherals and putting them into tables (e.g. ACPI) UEFI BIOS
+-Initializing peripheral devices
+-Initializing storages such as SSD and HDD
+-Initializing IO devices such as keyboard and mouse
+-Initializing display devices such as GPU (this can be also included in the peripheral devices)
+
+Once these are done, the execution needs to be transferred to the OS. This is done by taking the code that loads the OS from the HDD
+or SSD, loading it into the memory and starting executing that part of the memory. The code that loads the OS (or kernel) is generally
+the "bootloader". Bootloader checks which OS to load (in case there are multiple) and loads that OS. It also passes the parameters
+that OS takes. On Linux, these bootloaders include programs like grub, lilo etc.
+The firmware code generally cannot load the whole OS for the following reasons:
+-The OS might be too large and the firmware might not be capable to load that large of an OS
+-Loading OS is a rather complex process that the firmware isn't generally designed to do
+-There might be multiple OSs in the storage and deciding which one to use might need its own program
+
+System programmer needs to put their code that loads the bootloader in the predefined storage location.
+
+There are different bootloaders that are used by different OSs. Windows uses its own bootloader which is called Windows Boot Manager.
+Its program name is "bootmgr". On Linux, there are multiple bootloaders that are written by different project groups. The "LILO"
+bootloader used to be very common. Afterwards, "GRUB" was used very common. GRUB is still very common and many distros come with GRUB
+by default. Recently, "SYSLINUX" has also found some use. SYSLINUX is a minimalist bootloader and is preferred in smaller systems.In
+embedded systems, mainly used bootloader is called "Das U-Boot", or "U-Boot" for short (U stands for universal).
+
+Note: UEFI (Unified Extensible Firmware Interface) is an improved version of BIOS and is now a standard. It is a very large system
+that also includes the bootloader. It supports more features than BIOS, such as support for larger storage, more security features,
+improved graphics capabilities etc.
+
+So the general process is as follows:
+1) MCU is RESET
+2) Codes in the ROM's RESET vector are run
+3) These codes load a predefined small sector in the storage into RAM and executes it
+4) These codes load the bootloader into RAM and executes it
+5) The bootloader loads the OS and runs the initial codes of the OS
+
+The codes in the ROM's RESET vector are written by the hardware manufacturers. The system programmer (you) aren't responsible for
+this very very low level codes.
+
+1 block is 512 bytes.
+
+There are two more explanations on this topic in the course notes. Check them out.
+
+The bootloader can be broken down into stages. The terminology differs, but the one that will be used in this course is given below:
+-The code that initializes the hardware: 1st stage bootloader.
+-The code that loads the OS: 2nd stage bootloader.
+
+The other terminology is as follows:
+-The code that initializes the hardware: 1st stage bootloader
+-The code that is loaded by the 1st stage: 2nd stage bootloader (e.g GRUB)
+-The code that that loads the OS: 3rd stage bootloader
+The 3-stage terminology won't be used in this course.
+
+In many desktop applications today, the GRUB bootloader is used. This bootloader, loads the Linux kernel image into RAM and runs it.
+This bootloader also takes the kernel parameters from the user and passes them into Linux's kernel.
+In this course, when compiling the kernel and rebooting with the new kernel, it will be assumed that the bootloader be GRUB. Examples
+in this course are given in the context of x86 based desktop/laptop computers.Historically, x86 based computers are also called PCs
+(personal computers). When the word PC is used, x86 architecture is implied. However, Apple's Intel computers are an exception here.
+Although Apple used Intel processors for a while (and is now using ARM with their M chips), they changed the hardware and therefore
+they are different than other x86 processors. Therefore desktop here doesn't include macOS computers.
+
+During the boot process, the 0th sector of the storage is loaded into RAM. One sector is /*Check the rest from the SS*/
+
+CHANGING THE BEHAVIOR OF LINUX KERNEL
+-------------------------------------
+There are 3 main parameters of changing the linux kernel behavior:
+1) By writing new kernel mode device drivers or kernel modules (this doesn't need recompiling the kernel, it can be plugged in/out
+while the OS is running). These codes act as part of the OS, similarly to adding new components to the hardware through expansion 
+ports - this method isn't included in the course
+2) Through kernel parameters (you pass the parameters to the bootloader, and then it passes those to the kernel). This method doesn't
+require recompilation of the kernel - this method is related to course
+3) During kernel compilation, some parameters can be given to the compiler so that the kernel will be compiled the way we want it.
+When this method is used, the kernel codes doesn't need to be changed but the symbolic constants (#define) given to the compiler
+causes conditional compilation, which determines which codes will get compiled and which ones won't. This can be used to change both
+the behavior of parts of the kernel and addition/removal of modules of the kernel. - this method is related to the course.
+4) Changing the kernel codes (this requires recompiling the kernel and is the lowest level option) - this method is the main focus of
+the course
+5) The behavior of the kernel can also be changed through the terminal by usage of "proc" and "sys". This doesn't require recompiling
+the kernel. - this isn't the focus of the course (I think, I am not sure)

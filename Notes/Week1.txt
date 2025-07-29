@@ -1,0 +1,192 @@
+Aralar 15 dk
+
+Kursta Debian turevi (apt package manager kullanan) bir sistem kurulu oldugu varsayilacak.
+
+raspberry pi 5 (raspbian) ve beetle boomblack ARM islemcileri ile alakali olan kisimlarda kullanilacak.
+sen de alabilirsin (fiyat 2-6k arasi), raspberry pi 5 alirsan 27W guc adaptoru al ve sogutucu kullan (for better performance)
+
+Su anda en cok kullanilan platform Intel x86
+Gomulu sistemlerde en cok ARM platformu
+RTOS lerde Power PC platformu kullaniliyor
+
+Kursta GNU inline assembly ile x86 ve ARM islenecek
+
+elixir.bootlin.com/linux/ (bu linkte linuxun butun versiyonlarinin source codelari var, all the way back to the very first version)
+
+Elixir bootlin normalde embedded linux icin ama linke /linux/ eklendiginde linuxun kodlarini da barindiriyor
+
+indirmek icin kernel.org (resmi sitesi), kernel.org/pub/ butun versiyonlari indirilebilecek sekilde host ediyor
+
+fxr.watson.org da elixir icin baska bir alternatif, diger kernellari da iceriyor (apple darwin and freebsd included)
+Bu sitede linux kerneli cok detayli degil.
+
+lxr.linux.org vardi ancak kapandi
+
+NOTE TO SELF: you should probably learn makefiles and cmake in more detail
+
+KURSTA HANGI VERSIYONLAR KULLANILACAK
+-------------------------------------
+v0.0.1, v2.2 ve v2.4 ve v.2.6 ((bu versiyonlarda linux kernel standart bi kernel haline geliyor)). Burdan sonra versiyon
+numaralandirma sistemi degisti v2.6 ile simdiki versiyonlar arasinda cok muazzam bir fark yok, v6 ya kadar gelmis olmamizin sebebi
+numaralandirmanin degismesi. Son olarak da Guncel versiyonlara bakilacak
+-------------------------------------
+
+kursun dropbox ismi LinuxKernel. Link hem dropbox ta hem de pc de var. maile gecir.
+
+Bu kursun konusu ile alakali dunyada basili 6-7 tane kitap var, cok fazla yok. Textbooks:
+Best one: Understanding the Linux Kernel, 3rd Edition by Daniel P. Bovet and Marco Cesati (1st edition focuses on v2.2 of the kernel.
+2nd edition focuses on v2.4. 3rd edition focuses on v2.6) Last edition was published in 2005
+Other options:
+-Professional Linux Kernel Architecture, 1st Edition by Wolfgang Mauerer 
+-Linux Kernel Development
+-Linux Device Drivers
+-Other books mostly focus on device drivers, which is not completely parallel to the contents of the course
+All of these textbooks are shared via Dropbox in e-book form (pdf). These are in the LinuxKernel folder.
+The books under the OperatingSystems folder are not focused on a specific kernel but are
+more focused on abstract ideas that all modern OS implements.
+Tanenbaum is an important author about OSs apparently. Linus communicated with him when developing Linux
+-Advanced Programming in the UNIX Environment, 3rd Edition by W. Richard Stevens and Stephen A. Rago (2013 latest release) is also
+an important book
+-The Linux Programming Interface by Michale ... focuses on user mode programming specific to linux, not other operating systems.
+-Under the Tools/ directory, there are helper manuals and other pdf files. Make reference is there, check it out.
+-ARM-Documentation/ directory has documentations for ARM processors, also available in ARM websites.
+-x86-Documentation/ is the same with ARM-Documentation/ but for x86 architecture.
+-Others/ are misc pdfs such as TCP/IP documentation.
+
+NOTE TO SELF: You should probably learn Rust. Especially given that linux kernel is starting to implement stuff with Rust.
+TIOBE Index is something that measures the monthly popularity of different programming languages.
+
+Linux kernel codes cannot be compiled with just any compiler because they use a lot of GCC specific extensions. Therefore, there are
+a lot of non-standard C codes.
+Therefore GCC with the proper extensions are needed to compile the kernel.
+Clang can also be used but there are some handicaps in some places as well.
+
+What is an OS (initially called resource managers)?
+It manages the hardware (resources as it was called in the early days).
+Resources:
+-CPU
+-Memory (RAM, primary memory)
+-Disk (HDD, SSD, other long term storage, secondary memory)
+-Peripheral devices (external (helper) processors that are connected to and controlled by the CPU, keyboard, mouse, printer, serial
+connections etc.)
+-Network devices
+
+Managing means:
+-Scheduling the CPU (via a scheduler system)
+-Following the RAM's state to manage programs in terms of how they can use RAM (memory management)
+-Managing the files and folders on disks (file systems)
+-Controlling peripheral devices (peripheral management)
+-Implementing network protocols so that networking is available on the computer. NETWORKING IS A RESPONSIBILITY OF THE OS! (network
+management)
+It takes the network data from the networking hardware and passes the data to the programs that request it.
+
+An OS consists of two main parts: "kernel" and "shell". Kernel is the part that controls the hardware.
+Shell is the part that acts as an interface for the user. Terminals, window managers, Windows Explorer etc. are parts of the shell.
+Modern shells are more inclined towards GUIs. Older ones are more towards terminals.
+
+Programming (controlling) the hardware without an OS is called "bare metal programming".
+Bare metal programming is generally done when there is a very specific goal. As the requirements of the project increases,
+an OS becomes necessary.
+
+Booting can be described as starting the CPU.
+
+A software doesn't need to provide managing all of the above resources in order to be considered an OS. Only providing some of them
+is enough. However, if most of them aren't provided, it might be more appropriate to consider the software as a firmware rather than
+an OS.
+
+Operating systems can be categorized and then subdivided even further based on the following categories:
+-Process management:
+  -Tek prosesli (single process)
+  -Cok prosesli (multi process)
+-User count:
+  -Tek kullanicili (single user)
+  -Cok kullanicili (multi user)
+-Kernel structure:
+  -Micro kernel (many processes run in user space)
+  -Monolithic kernel (many processes run in kernel space)
+Linux has more of a monolithic kernel. Windows and macOS is more at the center of both. Minix is a microkernel
+-Response to external events:
+  -Real Time (gercek zamanli) OSs
+    -Hard real time (every single nanosecond (or whatever the unit of time is) is strictly important)
+    -Soft real time (some misses every now and then can be tolerated)
+    Being hard or soft real time OS is a scale(spectrum)
+    Examples where RTOSs are necessary can be: Automative systems, image processing, medical devices, aviation, space industry,
+    defense industry, military etc.
+    Commonly used RTOSs:
+      -Closed Source: VxWorks, Integrity RTOS, QNX, ThreadX
+      -Open Source: FreeRTOS, Zephyr OS, RIOT OS, ChibiOS, eCos, RT-Linux (Preempt-linux)
+  -Non-real time (gercek zamanli olmayan) OSs
+  The most important difference between rt and non-rt OSs is the scheduler.
+-Distribution (Dagitiklik):
+  -Distributed (dagitik) OSs
+  -Non-distributed (dagitik olmayan) OSs
+  Distribution in this context means treating multiple computers as one whole computer. A distributed OS needs to provide mechanisms
+  that allow those computers to communicate with each other. Timing is very important in distributed OSs.
+  Both some desktop OSs and OSs that are specifically designed to be distributed OSs can be examples of these.
+  The user thinks the machine as a single machine. But OS manages multiple machines. This is called transparency.
+  For more information, check Distributed Operating Systems by Tanenbaum.
+-Hardware:
+  -Desktop OS
+    -Linux
+    -Windows
+    -macOS
+  -Mobile OS
+    -Android (developed by modifying Linux)
+    -iOS (developed by modifying macOS)
+    ARM processors are used extensively here because of it's low power consumption. In the last couple of years, Apple also started
+    to use these as their M chips in laptops and desktops.
+-Source code licensing:
+  -Open Source OSs
+    -Source code can be downloaded, modified, recompiled and redistributed. When redistributing the modified OS, the new OS must
+    still be open sourced or provided upon request, depending on the licensing of the original OS.
+    -Open source projects can still be managed by a single entity while being open to contribution. For example, Android is open
+    source but is managed by Google.
+    -macOS's kernel is open source by shell is closed source.
+  -Closed Source (Proprietary) OSs
+    -Source code can not be downloaded, modified, recompiled and redistributed.
+  ReactOS's source is very similar to Windows' source, so when you want to see Windows' source code, you can check ReactOS's
+  source code for a very similar code base. ReactOS also has developers who at some point worked/still works on Windows' source code.
+  NOTE TO SELF: Check ReactOS by installing it into a VM. It looks interesting.
+-Source code originality:
+  -Original (the code is written from scratch)
+    -UNIX
+    -DOS
+    -Windows
+    -Linux
+    -BSD
+    -OpenVMS
+    -IBM 360
+  -Non-original (the code is taken from another OS and modified):
+    -macOS (it's kernel is Darwin, which sits on top of XNO, which sits on top of Mach and FreeBSD.
+     Since it is based on FreeBSD which is an open source, the whole kernel must be made open source)
+    -iOS (based on macOS, which is open source)
+-GUI support:
+  -GUI:
+    -Linux (with X11 or Wayland)
+    -Windows
+  -Non-GUI:
+    -DOS
+-Network service state:
+  -Client:
+    -They take data from servers and process it
+  -Server:
+    -They have built-in tools for servers
+  This categorization isn't as relevant as it was anymore. The same/similar Linux kernel can be used for both clients and servers.
+
+History of OSs
+--------------
+OSs weren't really a thing in 1940s. Then transistors came along, making the hardware more efficent and reliable in 1950s.
+The concept of OS started in 1950s and really started to catch on in 1960s. Before that, the hardware was sold with only a firmware.
+There weren't a standard OS in 1950s. General Motors developed NAA IO (North Americal Aviation Input/Output System) in 1956 which is
+considered the first real OS. It was developed for IBM's 701.
+In 1960s, OSs started to be sold along with the hardwares and IBM sold System/360 as such machines.
+UNIVAC is the first company that started selling computers.
+The history is very long. The rest is in the course notes.
+
+
+
+
+
+
+
+
