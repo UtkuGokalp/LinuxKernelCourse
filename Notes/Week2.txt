@@ -181,7 +181,19 @@ in this course are given in the context of x86 based desktop/laptop computers.Hi
 Although Apple used Intel processors for a while (and is now using ARM with their M chips), they changed the hardware and therefore
 they are different than other x86 processors. Therefore desktop here doesn't include macOS computers.
 
-During the boot process, the 0th sector of the storage is loaded into RAM. One sector is /*Check the rest from the SS*/
+-When the PC is reset, the booting starts from BIOS, which can be found on the EEPROM.
+-This code initializes the hardware, which includes DRAM, then checks the boot media selected in the CMOS Setup menu (the menu that
+is accessed through the DEL or F12 or some other special key), loads the 0th sector (first 512 bytes) and lets that code the execute.
+NOTE: A sector is the smallest physical storage unit on a given disk, and it is a fixed 512 bytes in most file systems.
+-The first sector (the loaded code) is called the MBR (Master Boot Record). The last 64 bytes of the MBR is the Disk Partition Table.
+The MBR either loads a bootloader or loads the 0th sector of the active disk into DRAM and lets it execute.
+NOTE: The first sector of each disk on PC systems are called the "boot sector". The boot sector is responsible for loading the OS.
+However, if the MBR loads up a bootloader, then which OS to load can be asked to the user via a GUI.
+
+To summarize, the boot process of modern PCs is as follows:
+PC is powered on and reset -> BIOS codes on EEPROM does the first initializations -> After initialization, they load MBR to DRAM and
+deliver the execution to MBR -> MBR loads the bootloader into RAM -> Bootloader loads the boot sector of the selected disk -> This
+boot sector loads the OS and delivers the execution to the OS.
 
 CHANGING THE BEHAVIOR OF LINUX KERNEL
 -------------------------------------
