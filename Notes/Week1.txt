@@ -2,7 +2,7 @@ Aralar 15 dk
 
 Kursta Debian turevi (apt package manager kullanan) bir sistem kurulu oldugu varsayilacak.
 
-raspberry pi 5 (raspbian) ve beetle boomblack ARM islemcileri ile alakali olan kisimlarda kullanilacak.
+raspberry pi 5 (raspbian) ve BeagleBone Black ARM islemcileri ile alakali olan kisimlarda kullanilacak.
 sen de alabilirsin (fiyat 2-6k arasi), raspberry pi 5 alirsan 27W guc adaptoru al ve sogutucu kullan (for better performance)
 
 Su anda en cok kullanilan platform Intel x86
