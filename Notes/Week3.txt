@@ -1,0 +1,245 @@
+Kernel parameters can be given in 2 formats in the terminal: "key=value" (if the parameter has an argument) or "value" (if the
+parameter doesn't have an argument)
+Passing these arguments to the kernel's code is the job of bootloader. They are given to the kernel as a single string. Parsing this
+string is one of the early stages of initialization.
+Kernel params doc: https://www.kernel.org/doc/html/v4.14/admin-guide/kernel-parameters.html
+It should be noted that some kernel parameters are specific to some CPU architectures. These parameters might be available in one
+architecture and not in another. However most of the params are available to all architectures.
+
+NOTE: The MBR booting process covered last week is somewhat obsolete, UEFI booting process is a bit different. This will be covered
+later in the course.
+
+WHY RECOMPILE THE KERNEL
+------------------------
+-To remove or add some kernel modules and device drivers
+-To patch the kernel
+-To add completely new features or subsystems to the kernel
+-To configure the kernel in a way that cannot be achieved through kernel parameters
+-To be able to use new kernel codes
+-To be able to use new versions of the kernel
+
+Linux kernel doesn't check whether or not the parameter exists during the parsing operation. So if a parameter is passed to the kernel
+that doesn't have any correspondance in the code, kernel will ignore that parameter (and not panic). In order to use custom params,
+kernel needs to be notified of the params that we want it to process.
+
+HOW TO DOWNLOAD THE KERNEL
+---------------------------
+1) Download the kernel codes from kernel.org (all released kernel codes can be found under pub/linux/kernel)
+2) In order to download with wget, use https://cdn.kernel.org/pub/linux/kernel/[MAJOR_VERSION].x/linux-[VERSION].tar.xz
+For kernel version 6.8.0:
+[MAJOR_VERSION] can is given as v6
+[VERSION] is given as 8.0
+
+On Debian based systems, the kernel that the distro currently uses can be downloaded with sudo apt-get install linux-source. The
+installation will be done to /usr/src folder. To specify the version, change linux-source to linux-source-6.8 (format is -major.minor)
+If the changes are to be done for a specific distro, using their version of the kernel is better for compatibility. In desktop distros
+the compatibility issues might be minor and can be mitigated by using the distro's own kernel configuration file. However for systems
+like RaspberryPi or BeagleBone Black can have more serious compatibility issues and provide their kernels on their websites. Using
+these kernels for such boards is beneficial.
+
+COMPRESSION ON LINUX SYSTEMS
+----------------------------
+-tar: Adds the files one after the other into a single file, doesn't do compression. Helps with file system internal fragmentations.
+-bz, gz: The compression method.
+In order to uncompress, first the compression is removed (e.g. un-gz), then tar is removed via untar.
+The extension is therefore in the form of .tar.<compression_extension>. For example, tar.bz, tar.gz, tar.xz etc.
+It is worth mentioning that a .tar.bz2 file (or another compressed format) can be uncompressed with tar. That doesn't mean tar does
+the uncompressing. tar simply calls the program that does the uncompressing, then separates the tar'd files once uncompressing is
+complete.
+Common compression formats on Linux:
+-gzip (.gz)
+-bz2 (.bz2)
+-xz (.xz)
+-zip (.zip or .z)
+Typically, compression performances is as follows:
+xz > bz2 > gz == zip (gz and zip uses the same algorithms)
+It should be noted that as compression performance increases, compression/uncompression times also increase.
+Programs for compressing/uncompressing:
+-gzip/gunzip
+-bzip2/bunzip2
+-xz/unxz
+-zip/unzip
+These programs deletes the initial file once compression is complete. If this isn't desired, flags need to be passed.
+Using tar:
+-c: tar (short for create)
+-x: untar (short for extract)
+-f: specifies the file
+-v: verbose
+-z: makes tar call gzip/gunzip for (un)compression
+-j: makes tar call bzip2/bunzip2 for (un)compression
+-J: makes tar call xz/unxz for (un)compression
+tar can also take in folders instead of individual files
+
+LINUX VERSIONING:
+-----------------
+linux_major.minor.patch-extra (e.g. linux_6.8.2-generic)
+major: Big changes
+minor: Small changes (like adding small features)
+patch: Even smaller changes (like bug fixes or very small features)
+extra: Optional part that is used by some linux distros. These are related to kernel configuration parameters used and do not indicate
+code changes to the kernel itself. (These usually use words like stable, custom, generic, realtime, rcX etc.
+rc means release candidate and X indicates the version of the release candidate)
+
+Which options are available to the bootloader can be viewed by going to the /boot directory.
+System information can be viewed with uname command, which just parses the /proc/version file.
+
+HOW TO BUILD LARGE PROJECTS
+---------------------------
+By using build systems. Most common is the "make" build system. Linux kernel compilations are also done with make. However, Linux
+kernels have project-specific structures/methods for compilation. This is called "KConfig System" or "KBuild System". We will first
+learn how to compile the kernel, then see the kernel configuration and finally rebooting with the modified kernel.
+
+
+HOW TO COMPILE THE KERNEL
+-------------------------
+1) First, everything that will be used during the building needs to be installed:
+sudo apt install build-essential libncurses-dev bison flex libssl-dev wget gcc-arm-linux-gnueabihf binutils-arm-linux-gnueabihf \
+libelf-dev dwarves
+
+2) Kernel needs to be downloaded (and uncompressed if necessary)
+
+3) A configuration file needs to be used before compilation. Writing a config file from scratch is very hard, so there are some
+default configuration files that can be used as a base. These default config files can be found in the kernel source but the best
+option is to get the default config file of the distro that is currently being used. Where to find the default config file: Inside
+the /boot folder. e.g. config-6.8.0.71-generic. This file is copied into the root folder of the kernel with the name .config. The
+default config files that are inside the kernel source can be found under /arch/<cpu_architecture>/configs. It should be noted that
+the default config files inside the kernel source are rather minimalistic.
+
+The config files are have the following very simple structure:
+#Comment
+KEY=VALUE
+However, they are very large files, in the order of 10k-20k lines and are very hard to write from scratch.
+
+In shell, $(command) or `command` runs the command inside the paranthesis, pipes its stdout into console and runs the output as a new
+command. Or, if it is used in conjunction with another shell command, the stdout of the command is piped into the other command.
+This can be used to get the files of the current kernel. Ex:
+echo $(uname -r)-config => Gets the config file name as it is named in ubuntu based machines
+
+nproc: Gets the number of processors in the computer. This can be used as: make -j$(nproc) for multi-threaded compilation.
+c
+some of the make targets:
+-------------------------
+1) make defconfig: gets the default config file from the arch directory and puts it into the root directory. This command gets the
+least amount of configs to compile the kernel.
+2) make oldconfig: If there is already a .config file inside the root directory and we want to add some new stuff to it that came
+with a new version of the kernel (aka keep everything and add the new stuff), this target can be used.
+3) make <platform>_defconfig: Takes the default configuration file for the given platform and copies it into the root directory as
+the .config file. 
+4) make modules: Only compiles the modules.
+5) make uninstall: Undoes everything done with make install.
+6) make allnoconfig: creates the configuration file by saying no to all questions asked during the build process (minimum features)
+7) make allyesconfig: creates the configuration file by saying yes to all questions asked during the build process (maximum features)
+8) make allmodconfig: all drivers are compiled as modules that live outside the kernel
+9) make dtbs: Compiles /arch/<platform>/boot/dts device tree source files and obtains dtb files. This is recommended to be done in
+embedded systems.
+10) There are some other configs that I couldn't note down.
+
+The config file inside the /boot directory isn't used during the boot process of the system. Therefore there would be no problems with
+the boot process if this file was to be deleted. This config file is just there out of convention and for the people who will be
+recompiling the kernel.
+
+In order to use an old config file with a new kernel, make oldconfig target needs to be used.
+
+make menuconfig target can be used as an ncurses based, terminal-gui kernel configuration tool. This tool takes the .config file in
+the root directory as a base. If no .config is available, it takes the default config file in the arch/ directory, which, as discussed
+before, is unadvisable. Therefore the better use of this tool is first getting the proper .config file manually, then using this tool
+for further customizations.
+"Local version append to kernel release" option adds the given string to the end of the compiled kernel file. This is advised for
+being able to distinguish between kernel versions. "custom" is a common string for this purpose.
+
+Once the .config file is copied to the kernel source root, "make menuconfig" or "make oldconfig" is advised to be used. If not, things
+might go fine but it is better to use one of them to be on the safe side.
+
+In later versions, Linux kernel added a certificate system for improved security. This means when compiling the kernel, either the
+certificate modules need to be disabled or a valid certificate needs to be provided since by default it will be unauthorized. To
+disable, the following configs can be changed in the config file:
+
+CONFIG_SYSTEM_TRUSTED_KEYS=""
+CONFIG_SYSTEM_REVOCATION_KEYS=""
+CONFIG_SYSTEM_TRUSTED_KEYRING=n
+CONFIG_SECONDARY_TRUSTED_KEYRING=n
+
+CONFIG_MODULE_SIG=n
+CONFIG_MODULE_SIG_ALL=n
+CONFIG_MODULE_SIG_KEY=""
+
+Kernel certification will be examined in more detail in the future.
+
+make clean can be used for removing all previous compilations. To compile the kernel, the make command can be run. Alternatively, for
+simultanous compilation, make -j$(nproc) can be used to compile accross multiple CPUs/cores.
+
+So we've compiled the kernel, now what?
+---------------------------------------
+We get the kernel image, device drivers that will be used by the kernel and some other files such as kernel symbol table used for
+debugging. These can be found under:
+-Compressed kernel image: Under /arch/<platform>/boot/ with the name "bzImage". Compressed because the kernel image has become large.
+During the boot process, kernel is automatically uncompressed.
+-Uncompressed ELF kernel image: Put under kernel source root with the name "vmlinux". vm comes from virtual machine, an old tradition.
+-Kernel modules (device drivers): Unders drivers/, fs/ and net/. These can all be put under a folder using "make modules_install" 
+-Kernel symbol table (for debugging): Found under the kernel source root with the name "system.map".
+
+SIDE NOTE: For setting environment variables for a specific time of running a command, the following can be used:
+$ ENV_VAR=value <command>
+
+It should be noted that the one of the most time consuming parts of the compilation is compiling the kernel modules. All of these
+drivers are most of the time not necessary for the hardware the kernel is meant to run on. Unrequired drivers can be removed in the
+kernel configuration phase. Also, these device drivers take very large amounts of space on the disk.
+
+Once these are found, these files need to be put under the required directories. This can be done either manually or with the target
+"make modules_install && make install". The required directories are as follows (for GRUB):
+
+-Drivers are copied under the /lib/modules/<kernel_version>/ by "make modules_install". However, these modules aren't loaded just
+because they are under the right folder. They are loaded when and if the kernel needs them.
+  make modules_install doesn't just copy files. It (in order):
+  -Copies modules files under /lib/modules/<kernel_version>
+  -Creates "modules.dep" file and and copies it to /lib/modules/<kernel_version>
+  -Creates "modules.alias" file and and copies it to /lib/modules/<kernel_version>
+  -Creates "modules.order" file and and copies it to /lib/modules/<kernel_version>
+  -Creates "modules.builtin" file and and copies it to /lib/modules/<kernel_version>
+  Some of these doesn't have to exist, but for the system to work as intended, it is better for them to exist.
+  A device driver might be using another driver as a dependency. modules.dep file holds these dependency informations (text file).
+  It displays which drivers needs which ones in the following format:
+  <module_path>: <dep1> <dep2> ...
+  If modules.dep doesn't exist, "modeprob" won't work. It can be recreated via the command "depmod -a" by using the currently in use
+  kernel. For a specific kernel version, "depmod -a <kernel_version>" can be used.
+  For depmod -a to work, modules need to exist under /lib/modules/<kernel_version> because this command checks these files and the ELF
+  file to work out the dependencies.
+
+  modules.alias holds the relationship between the device driver and its name or id as a text file. It's format is:
+  alias <descriptor> <module_name>
+  If this file doesn't exist, loading of some drivers can fail. Similarly, to recreate this file, "depmod" command can be used.
+
+  modules.order contains the order in which device drivers need to be loaded. This generally isn't important, but for some drivers
+  it is. It can be recreated via "depmod -a" in case of deletion. First line's driver is loaded first, second line's driver second
+  and so on. 
+
+  For embedded systems, description file for device trees can be genereated with "make dtbs". The files will be created under
+  /arch/<platform>/boot/dts or under the "vendor" folder. Device trees doesn't need to be used in Intel based systems since their job
+  is done by the ACPI protocol.
+
+-The kernel image, temporary root files system file and device tree needs to be put under the required folders, which are under the
+/boot directory. "make install" does this automatically and also updates GRUB so the new configurations show up in the GRUB menu.
+
+
+TEMPORARY ROOT FILE SYSTEM (initrd or "initial ramdisk")
+--------------------------------------------------------
+initrd, works as a file system in RAM (RAM disk image) before the actual file system is mounted from the disk. This is necessary
+because to load some files from the disk, some drivers need to be loaded. It is fine if these drivers exist inside the kernel image,
+but if not, they will be on the disk (lib/modules/$(uname -r)) and will need to be loaded. So the situation becomes, we need to
+access to disk to load the drivers that allow us to interact with the disk, but we need those files to access the disk to begin with.
+Therefore, the disk drivers are accessed through initrd, which allows access to the disk, which allows drivers to be loaded and do
+the rest of the execution. However, this is just one reason why we might need initrd. It can also be necessary because we might need
+to access other drivers before accessing the disk, or some of the shell commands that needs a filesystem might need to be run.
+initrd is loaded by the bootloader (e.g. GRUB) along with the disk drivers and other necessary components. A temporary filesystem
+isn't theoretically necessary, but it will require every single device driver the kernel will need to be enabled during the kernel
+configuration. However, even then some problems might arise. Especially on PCs, booting the system without a temporary fs is very
+tricky. The temporary fs can also be used to run the OS in safe mode. It is also used while updating the system, since the system
+cannot update itself on the disk it is currently using.
+
+"make install" command (in order):
+-Copies the kernel image from /arch/<platform/boot/bzImage to /boot/ with the name "vmlinuz-<kernel_version>" (z is for zipped)
+-"System.map" is being copied under /boot/ with the name "System.map-<kernel_version>"
+-".config" file is copied under /boot/ with the name "config-<kernel_version>"
+-Creates the temporary root file system file and copies it under /boot/ with the name "initrd.img-<kernel_version>"
+-If GRUB is used, GRUB config is updated and changes are added to GRUB menu, which allows the system to automatically boot with the
+new kernel image.
