@@ -57,6 +57,40 @@ HOW TO CHANGE KERNEL CODES:
 For 1 and 2, make files doesn't need to be changed. For 3 and 4, respsective makefile needs to be modified so that it is aware of the
 new codes.
 
+Adding a new C file:
+--------------------------------------------------------------------------------------------------------------------------------------
+If a new file will be added to an existing directory, a line with the following format needs to be added at the makefile in that
+directory. This line can be added to the very end.
+
+obj-y+=<source_code_file_name>.o
+
+Adding a new directory with files in it:
+--------------------------------------------------------------------------------------------------------------------------------------
+If a new directory is being added with source code files in it, the makefile in the directory that the new directory is created in
+needs to be edited to add the following line. The line can be added to the very end.
+
+obj-y+=<directory_name>/
+
+Then, a new makefile with the name "Makefile" needs to be created in the newly created directory, and for each source code file in it,
+the "obj-y+=<source_code_file_name>.o" line needs to be added to the new makefile.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
