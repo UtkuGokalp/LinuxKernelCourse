@@ -1,0 +1,70 @@
+On Debian-based systems, temporary root files system (initramfs) can be created with "update-initramfs".
+
+By default, make install command copies:
+-Kernel image -> /boot/ vmlinuz-<kernel_version>
+-Kernel symbol table -> /boot/System.map-<kernel_version>
+-module files -> /lib/modules/<kernel_version>/kernel/
+-.config -> file /boot/config-kernelversion
+-temp root fs -> boot/initrd.img-<kernelversion> (can be created with update-initramfs)
+
+initrd.im can be viewed with the "cpio -idv < filename" command. However, in case this file is compressed, it's smart to check the
+type of file with the command "file". If it is a compressed file, it needs to be uncompressed with the proper command first. cpio
+is an archive format that is used for the temp root fs used during boot. Just like tar, cpio simply adds files one after the other. It
+should be noted that the contents of this file can change between distros.
+
+-------------------------------------------------------------------------------------------------------------------------------------
+make install does everything necessary to update the GRUB to open up with the new kernel. If GRUB menu needs to show up on every time
+the computer is booted, the following changes need to be written to /etc/default/grub:
+
+GRUB_TIMEOUT_STYLE=menu
+GRUB_TIMEOUT=5
+
+Once these changes are made, GRUB bootloader can be updated with:
+
+sudo update-grub
+
+These operations can also be done via the program "grub-customizer", which needs to be installed on the system.
+-------------------------------------------------------------------------------------------------------------------------------------
+
+The version of the kernel image isn't just the name of the file, it is actually written inside the compiled kernel image. This means
+we need to have a filename that matches the string inside the kernel image. In case you forget what name you gave to the image and
+therefore don't know what string is compiled into the kernel image, this can be checked with the command
+"strings vmlinux | grep "Linux version"" by running the command where the kernel image is.
+
+As seen so far, it is very .... to do all of this by hand. The easiest way really is just running "make modules_install" and then
+"make install". This way, everything is handled automatically.
+A little reminder: "make modules" just compiles all the modules. "make modules_install" also copies the compiled files into necessary
+places. If all of the modules can be compiled without any errors, there are no problems using make modules_install directly.
+
+STEPS OF COMPILATION:
+---------------------
+1) Install necessary tools for compilation
+2) Download and extract kernel codes from kernel.org
+3) Copy config files from /boot into the kernel source root with the name .config
+4) Use "make menuconfig" to change .config
+5) If kernel doesn't need a signature, previously discussed configurations are made (either manually or with make menuconfig)
+6) Kernel is compiled with "make -j$(nproc)"
+7) Modules and relevant files are copied to their places with "sudo make modules_install"
+8) Kernel image and relevant files are copied to their places with "sudo make install"
+
+HOW TO CHANGE KERNEL CODES:
+---------------------------
+1) Changing the existing kernel functions
+2) Adding a new function to the existing kernel files
+3) Adding a new C file into a directory in the kernel source
+4) Adding a new directory to the kernel source and adding new files into it
+
+For 1 and 2, make files doesn't need to be changed. For 3 and 4, respsective makefile needs to be modified so that it is aware of the
+new codes.
+
+
+
+
+
+
+
+
+
+
+
+
