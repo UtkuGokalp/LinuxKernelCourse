@@ -175,7 +175,8 @@ debugging. These can be found under:
 -Compressed kernel image: Under /arch/<platform>/boot/ with the name "bzImage". Compressed because the kernel image has become large.
 During the boot process, kernel is automatically uncompressed.
 -Uncompressed ELF kernel image: Put under kernel source root with the name "vmlinux". vm comes from virtual machine, an old tradition.
--Kernel modules (device drivers): Unders drivers/, fs/ and net/. These can all be put under a folder using "make modules_install" 
+-Kernel modules (device drivers): Unders drivers/, fs/ and net/. These can all be put under a /lib using "make modules_install". To
+out them under a different folder (e.g. for cross compilation), INSTALL_MOD_PATH="folder/path" environment can be used.
 -Kernel symbol table (for debugging): Found under the kernel source root with the name "system.map".
 
 SIDE NOTE: For setting environment variables for a specific time of running a command, the following can be used:
