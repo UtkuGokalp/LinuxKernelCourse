@@ -74,31 +74,61 @@ obj-y+=<directory_name>/
 Then, a new makefile with the name "Makefile" needs to be created in the newly created directory, and for each source code file in it,
 the "obj-y+=<source_code_file_name>.o" line needs to be added to the new makefile.
 
++= in Make
+----------
+X = VALUE
+#Value of X is VALUE here
+#... some other codes
+X += VALUE2
+#Value of X here is VALUE VALUE2. Make adds the space automatically, which is important for file names.
+#So basically, += in Make concatenates two strings with a space in between them.
 
+Linux's build system is called KBuild or KConfig.
 
+"dmesg" command can be used to get the kernel logs (a.k.a. logs printed from kernel using printk).
 
+Instead of obj-y, we can also write obj-m, which means the file is a driver (y is for yes, m is for module). If a file is appended
+with obj-y, this means the compiled code will be embedded inside the kernel image. However, if obj-m is used, this means the file
+will be compiled as a separate module and not be embedded inside the kernel image. obj-m can also be used for the newly created
+directories. So "obj-m += folder_name/" is perfectly permissible.
 
+The .c files always needs a newline at the end of the file (idky the tutor just said that's what we should do lol)
 
+OPTIONS IN make menuconfig:
+---------------------------
+ [] means that option can be included or excluded. [] means excluded, [*] means included.
+ --- or -*- means the value of that option cannot be changed.
+ <> means it can be included, excluded or modularized (compiled as a module). This is called "tristate" (üç konumlu seçenek).
+ () means that option can be given a value, such as a numeric value
 
+Once the menuconfig generates the .config file, during build, the build system generates a file called "autoconf.h". This file
+contains #define of the configurations in the .config file and their values are the same as it is defined in the .config file. This
+allows C codes to be able to get the values in the .config file and use them to achieve conditional compilation. autoconf.h isn't
+advised to be manually edited, although it can be done.
+NOTE: The path of autoconf.h is include/generated/autoconf.h
 
+If the value of a given option is "y" or "m", in the #define statement of the autoconf.h, the value of that option will be set to 1.
+Meaning, anything with [*], <*> or <M>, the value will be 1. Otherwise ("n", meaning [] or <>), that #define won't be generated at
+all. If a value is given with (), then the value of the #define will be the value inside the paranthesis.
 
+In order to find out what the name of the #define will be when autoconf.h is generated, the option in the make menuconfig provides
+an information menu about the option that provides that name, among other things. This menu can be accessed through by selecting the
+option in the make menuconfig.
 
+In order to use these values, the kernel codes can use #ifdef and #ifndef preprocessor directives.
 
+HOW IS THAT OPTION GIVEN TO THE MAKEFILES?
+------------------------------------------
+This section has to do with the obj-$(CONFIG_NAME) lines. The $(CONFIG_NAME) expands to "y", "n" or "m", which causes the relevant
+file to either be compiled or not, and whether to be embedded in the kernel or modularized. If the value is "n", the build system will
+either not generate the relevant line for that CONFIG_NAME, or will add it to the obj-n variable. Which one happens changes depending
+on the situation. Since obj-n either doesn't exist or ignored, either one just means disabling that part of the kernel.
 
+It is important not to confuse these with the #define codes for the C part. These are Makefile variables and cannot be used from C.
+Similarly, #define codes for C cannot be used by Makefile files either.
 
+Sometimes, system programmers, can add the following line manually, which has the same effect as obj-y += mysyscall.o:
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+ifeq ($(CONFIG_MYSYSCALL), y)
+    obj-y += mysyscall.o
+endif
