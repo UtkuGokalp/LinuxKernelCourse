@@ -1,0 +1,368 @@
+What happens if multiple processes in the process control block have the same memory data?
+That means these process control blocks are working in the same area of memory, aka they are threads (because threads share memory).
+
+In earlier versions of the kernel, task_struct had a thread_group circular linked list, which was used for managing the threads in a
+process. Since the list was circular, starting from any thread of the process one could access to all of the threads by simply looping
+through the list.
+
+Starting with v4.2 (2015), this was changed. In the new system, the root node of the linked list is stored alongside the process'
+signal information and the traversal need to start from this root node. This data can be found under the "struct signal_struct" with
+the name "thread_head". task_struct has a pointer to the signal_struct inside it.
+
+thread_group was kept at deprecated for a while. Later, it was completely removed.
+
+Whether or not the node right after the root node inside the signal_struct will point to the main thread is not guarranted.
+
+Aslinda Linux sistemlerinde prosesin tum threadlerindeki task_struct icerisinde bulunan signal gostericisi ayni signal_struct
+nesnesini gostermektedir. Yani thread_head kok dugumune biz prosesin ana threadinden erismek zorunda degiliz. Prosesin herhenagi bir
+threadine iliskin task_struct yapisindaki signaal gostericisi yoluyle bu list_head kok dugumune erisebiliriz.
+
+In UNIX/Linux systems, all processes have a system-wide unique process id. According to POSIX standards, the threads doesn't have a
+PID, PID is reserved for processes. The ID of threads are unique in a process-wide basis. However, in Linux kernel, since processes
+and threads share task_struct, threads also have a system-wide unique process ID.
+
+There is a POSIX function called "getpid()", which returns the pid value of the process, no matter which thread it is called from. In
+order to preserve compatibility, Linux kernel returns  the PID of the main thread of the process (which is the same as the PID of
+the process itself) when getpid() is called. One note is that getpid() internally calls sys_getpid(), which then returns the tgid.
+
+In order to easily access the PID of the main thread, task_struct has a variable called "tgid". tgid stands for thread group ID. This
+value is the same across all of the threads and represents the ID of the main thread:
+
+struct task_struct {
+	/*other members...*/
+
+	pid_t    pid; //PID of the current thread, this doesn't exist in POSIX
+	pid_t    tgid; //PID of the main thread and the return value of getpid()
+
+	/*other members...*/
+};
+
+This can also be used to find the main thread of the process. One can simply loop over all the threads and when tgid == pid is true,
+that means we are working with the main thread.
+
+There are two reasons for storing the pid value of the main thread in every single thread:
+1) The main thread of the process can terminate, which might prevent the main thread to be accessed anymore.
+2) It is faster to access the PID of the process itself this way.
+
+It should be noted that the value of pthread_t's thread id from POSIX and the pid inside task_struct are completely different things.
+
+Using the same struct to represent the threads as we do with processes allows Linux threads to have some abilities that POSIX
+standards doesn't provide. This ability is being able to execute functions that require a PID from threads as well from processes. One
+can obtain the thread id from the user mode by calling the "gettid()". gettid() is a Linux-specific function and is not a standard
+POSIX function. We even need to use a specific define to be able to use gettid(). The code is as follows:
+
+#define GNU_SOURCE
+#include <unistd.h>
+
+pid_t gettid(void);
+
+Linux kernel also keeps the address of the task_struct that belongs to the main thread. The name of this pointer is "group_leader".
+
+So what happens when the main thread ends? What will happen to group_leader and list_head node inside the signal_struct?
+When that happens, Linux kernel will choose a new group leader, and updates the group_leader and list_head inside the signal_struct
+across all the remaining threads. It should be noted that list_head node might not be affected from this update, depending on the
+situation. This means that the group_leader pointer will always point to a valid task_struct. Also, when the main thread is destroyed,
+the PID of the process doesn't change.
+
+Since almost every single information about the process is held in every single thread, the need to actually access the main thread is
+quite rare. But still, there are times that the information about the process is needed that is only stored in the main thread. Also,
+Linux kernel tries to be POSIX compatible, and some POSIX functions require the process id, not the thread id as parameters. To use
+or implement those functions, the main thread ID is needed.
+
+PARENT AND CHILD PROCESSES
+==========================
+In UNIX/Linux systems, each process is created by another process. In this case, the thread that creates the process is called the
+"parent process" and the process that is created is called the "child process". This parent-child relationship is very important. For
+example, in functions that perform waiting operations, the parent process waits for the child process to finish and return an exit
+code. So how is this parent-child relationship is managed using task_struct?
+
+task_struct has two pointers called "parent" and "real_parent", which hold the memory address of the parent process' task_struct.
+Normally, real_parent and parent point to the same process. However, in some scenarios (e.g. debugging, ptrace operations) parent can
+also point to another process (this is called "reparenting").
+
+So what happens when fork() is called?
+When fork() is called, real_parent and parent variables in the child process point to the task_struct of the thread that called
+fork().
+
+As mentioned before, when getppid() POSIX function is called it returns the PID of the parent process. This function internally calls
+sys_getppid(), which returns the tgid value inside the task_struct of real_parent.
+
+This whole parent/child process/thread relationship is represented as a tree inside the kernel. So what is the root node of this tree?
+It is a process called "init_task" with a PID of 0. task_struct for init_task is statically written inside the kernel. This specific
+task_struct can be found in "init/init.c" in newer versions of the kernel. Remember that a PID of 0 is invalid for processes in POSIX
+standards. This kind of process was called "swapper" or "pager" in UNIX/Linux systems. Once init_task process creates the init process
+it is terminated and doesn't act like an active process. However, it isn't destroyed and its task_struct is reserved as it acts as
+the root node of the processes linked list. After it is terminated, it effectively acts as a cpu idle task.
+
+So how do we traverse the subprocesses of a given process?
+The processes that have the same parent are called "sibling rocesses". These processes are held under a linked list that can be
+accessed through the variable called "children". There is also a linked list variable called "sibling", which can be used to loop over
+the sibling processes. children here is a root node.
+
+When a new thread is created, this new thread doesn't exist in the children or sibling lists. Threads are only held in
+list_head/list_node lists. children/sibling lists will only hold task_structs of subprocesses, not threads.
+
+So what if we want to traverse through the main threads of all the children?  We need to do that from the parent process' main
+thread's  children root node.
+One note: If there are no children processes, children.next == &children will be true.
+
+The kernel also holds all of the task_struct datas in a node called "tasks". If there is a need to traverse through all of the threads
+of all of the processes currently executing in the system, this node can be used. The root of this tasks variable is the init_task.
+
+Quick summary:
+-Each thread has a unique PID. The POSIX getppid() function returns group_leader's PID value.
+-In order to traverse through all the threads of a process, the thread_head linked list pointed by the signal_struct pointer is used.
+-Each process has a parent and real_parent pointers inside task_struct. These point to the task_struct of the parent thread.
+-tgid inside the task_struct holds the main thread's PID and thread_group points to the task_struct of the main thread.
+-task_struct for all the threads of a given process and all of its subprocesses are held in children/sibling linked lists.
+-The kernel holds all of the currently existing task_struct objects in the node called "tasks" of task_struct. The root is init_task.
+
+SOME COMMON SITUATIONS:
+-----------------------
+Q: How to obtain all the threads of a process?
+A: thread_head inside the signal_struct of a given process can be taken as the root node and thread_node nodes can be traversed.
+
+Q: How to obtain all subprocesses (children) of a process?
+A: The children node of the main thread of the process can be taken as the root node and and sibling nodes can be traversed.
+
+Q: How to know if a task_struct belongs to the main thread of a given process?
+A: If pid == tgid in task_struct is true, that thread is the main thread. Also, all of the threads of a given process has a
+group_leader pointer that points to the main thread.
+
+Q: How to traverse through all of the task_struct currently existing on the system?
+A: tasks node of init_task can be taken as root and tasks nodes can be traversed.
+
+SOME EXAMPLES:
+--------------
+There is no need to recompile the whole kernel for a few examples. What we can do is create a simple device driver. How to write a
+driver is beyond the scope of this course. However, how to write a barebones device driver will be explained before getting into the
+examples.
+
+In order to compile device drivers, there needs to be some headers in the system. These header files can be installed with:
+
+$ sudo apt-get install linux-headers-$(uname -r)
+
+When a Linux system is installed, these headers are usually already installed under "/usr/src/linux-headers-$(uname -r)" but it is
+good to ensure that they really are installed by running the command above.
+
+Device drivers are written in .c and .h files. Compilation of device drivers is a very complex operation. Therefore, there are premade
+makefiles in order to compile device drivers. The programmer writes a custom makefile that uses these premade makefiles. This custom
+makefile can be the following:
+
+obj-m += ${file}.o
+
+all:
+	make -C /lib/modules/$(shell uname -r)/build M=${PWD} modules
+clean:
+	make -C /lib/modules/$(shell uname -r)/build M=${PWD} clean
+
+This makefile takes an external argument named "file". The compilation of the device driver is done with the following:
+
+make file=<name_of_device_driver_without_.c_extension>
+
+When the driver is compiled, they produce a file with .ko extension. This file needs to be loaded into the system. In order to load
+device drivers, "insmod" or "depmod" commands can be used. However, "depmod" command also check some dependencies. Therefore, in our
+course, we will install the device drivers with "insmod" command. Of course, in order to load device drivers, root privileges are
+needed. Meaning these commands need to be run with "sudo". Following is an example:
+
+$ sudo insmod mydriver.ko
+
+When removing the device driver that is installed via "insmod" from the system, "rmmod" command can be used. The usage is as follows:
+
+$ sudo rmmod mydriver.ko
+
+When using "rmmod", not using .ko extension can be omitted. However when using "insmod", the extension needs to be written.
+
+To understand whether or not the device driver was loaded or not, "/proc/devices" file can be checked.
+
+Device drivers are modules that run in kernel mode and are extensions of the system. Device drivers cannot use standard C functions or
+POSIX functions that can be used in user mode. They can only use exported kernel functions. EXPORT_SYMBOLS macro in the kernel codes
+define which functions will be exported and therefore can be used from outside. For example:
+
+void clear_nlink(struct inode *inode)
+{
+    /*function codes*/
+}
+EXPORT_SYMBOL(clear_nlink)
+
+The following is a barebones device driver:
+
+#include <linux/module.h>
+#include <linux/kernel.h>
+
+MODULE_LICENSE("GPL")
+
+int helloworld_init(void);
+void helloworld_exit(void);
+
+int helloworld_init(void)
+{
+    printk(KERN_INFO "Hello World...\n");
+    return 0;
+}
+
+void helloworld_exit(void)
+{
+    printk(KERN_INFO "Goodbye World...\n");
+}
+
+module_init(helloworld_init);
+module_exit(helloworld_exit);
+
+When a device driver is installed with insmod, the module_init function is called. This is where the initialization can be done for
+the device driver. When it is removed from the system via rmmod, the function given to its module_exit macro is called. This is where
+the device driver can do clean up operations.
+
+Printing to the screen from device drivers is possible but not a good idea (idky but since it is beyond the scope, this wasn't
+explained). If messages need to be printed, they are printed into a log system. This log system can also called the "kernel ring
+buffer". The messages written to this log system can be found in the file "/var/log/syslog" or can be displayed via "dmesg" command.
+printk function can be used to print messages into this file.
+
+KERN_INFO macro determines the kind of message. Notice that there are no commas between KERN_INFO and the actual message. KERN_INFO is
+a macro that expands to a string literal. Remember that when two string literals are written side to side in C, they are concatenated.
+The easier way to use KERN_INFO is to use the macro "pr_info()". This macro expands to printk. 
+
+There are two ways things go in Linux: "kernel modules" and "device drivers". Modules that can be loaded into the kernel are the
+kernel modules. If a file can be loaded into a kernel module from user space (this file is called the "device file") and operations
+be done from that device file, these are called device drivers. This creates the condition that all device drivers are kernel modules
+but not all kernel modules are device drivers.
+
+Currently loaded modules can be obtained from "/proc/modules", loaded device drivers can be obtained from "/proc/modules".
+
+As mentioned before, device drivers can be accessed from the user space through a file path. These files are special files that are
+used to access the device drivers and are called "device files". These aren't disk files, they only represent a directory entry. When
+a device file is opened through POSIX functions, the kernel uses the device drivers and not the file that is on the disk. When we use
+file operations such as read, write, open, seek, close etc. on these device files, the program switches into kernel mode and functions
+inside the device driver are called. This method allows us to do things that we normally wouldn't be able to do in user mode.
+
+In Linux, device drivers are divided into two categories:
+
+-Character Device Drivers
+-Block Device Drivers
+
+The drivers that are used the most are character device drivers. Block device drivers are drivers for systems like HDD, SSD, CD-ROM,
+ramdisk where block data transfer happen. In UNIX/Linux systems, device files for character device drivers are represented with the 
+letter "c", whereas device files for block device drivers are represented with the letter "b". This letter can be seen via the command
+"ls -l".
+
+In UNIX/Linux systems, device drivers are placed under "/dev/" by convention. This isn't strictly necessary though. This folder used
+to have a disk-based file system. In later version of the kernel, this was changed to being a RAMDISK-based file system. In Linux,
+"udev" service (daemon) was added in order to provide automatization capabilities for the creation of device files.
+
+Each device driver has a "major" and "minor" number. These major and minor numbers are used to access the device driver and they act
+as an address into the file. When a device driver is created, these major and minor numbers are given to the file. Normal (regular)
+files doesn't have such numbers. Here is an example:
+
+crw-rw-rw-        5,0 root 31 Aug 11:53  tty
+
+Here 5 represents the major number and 0 represents the minor number. Major number represents the main code for the device driver.
+Minor number represents its instances. for example, a serial port device driver will have only one major number. If we have 4
+different serial ports in our system, there will be 4 different device files that will each have a unique minor number. Each of these
+4 files will represent one of the serial ports. When a device driver is developed, the developers need to write the codes in such a
+way that will support multiple minor numbers.
+
+Creation of device files can be done in the terminal via the program "mknod". This program calls the mknod POSIX function under the
+hood. mknod POSIX function then calls the sys_mknod() system function. mknod can be used as follows in order to create a device file:
+
+$ sudo mknod [-m or --mode for permissions] <file name> <c or b> <major number> <minor number>
+
+As an example:
+
+$ sudo mknod -m 666 mydriver c 250 0
+
+666 here is not the devil's number, but the number that will give read-write permissions (but not execute permissions)
+
+When a device driver is being developed, the major and minor numbers can be predetermined (and therefore fixed) and the code and
+device file creation can be done according to these numbers. However, if these numbers are unavailable in a system, this device driver
+will not get loaded into the system. Therefore, dynamically choosing these numbers is also an option. This is done by requesting an
+available number from the kernel and assigning that number as the major number. If the dynamic method is chosen, device file will have
+to be created after this number is obtained from the kernel. In order to make the device driver easier to install, driver developer
+will typically create a shell script for installation. This script first uses insmod to install the device driver, then refers to
+/proc/devices to obtain the driver's major number and then uses mknod with this number. We will use the same thing via the following
+installation script:
+
+#!/bin/bash
+
+module=$1
+mode=666
+
+/sbin/insmod ./${module}.ko ${@:2} || exit 1
+major=$(awk "\$2 == \"$module\" {print \$1}" /proc/devices)
+rm -f $module
+mknod -m $mode $module c $major 0
+
+Remember to give this script the execution rights via the following command:
+
+$ chmod +x load
+
+Then this script can be run as follows:
+
+$ sudo ./load mydriver
+
+This script will load the device driver and use the major number along with a minor number 0 to create a character device file. After
+removing the device driver that is loaded into the system this way, the device driver also need to be deleted. For this, the following
+script can be used:
+
+#!/bin/bash
+
+module=$1
+
+/sbin/rmmod ./${module}.ko || exit 1
+rm -f $module
+
+This unload script will also need execute rights to be give to it via chmod.
+
+$ sudo ./unload mydriver
+
+So why do we need device drivers?
+
+The protection mechanism of CPUs forbid many things to be done in user mode. So when a user space program needs to do one of these
+forbidden things (such as printing something to the screen), it needs to use a device driver. Putting something onto the screen isn't
+directly possible from user space programs. They use "terminal device drivers" that exist for this purpose. stdin and stdout files
+represent the device drivers. When the programmer wants to print something to stdout, the program switches into kernel mode and calls
+the functions inside the device driver. This way the protection is bypassed, which allows the program to print stuff to the screen.
+
+In other words, device drivers provide an interface between software and hardware devices. Over time, the term device drivers was
+generalized and not contain much more than just hardware devices. For example, there are device drivers for file systems in Linux.
+
+So is it possible to do everything in the kernel through device drivers? Nope, they can only do what the kernel allows them to do,
+which doesn't include important changes in the kernel.
+
+IO OPERATIONS OF A DEVICE FILE
+==============================
+open -> calls the device driver's open function
+close -> calls the device driver's close function
+read -> calls the device driver's read function
+write -> calls the device driver's write function
+lseek -> calls the device driver's lseek function
+
+However, not all operations can be done through a file. For codes in a device driver that doesn't relate to a file operation can be
+called through a mechanism called ioctl. Device driver developers open the device file and call the ioctl POSIX function with a code
+number (this function then calls sys_ioctl). This way, a device driver function can be called from the user space. When ioctl is
+called, the thread goes from user mode to kernel mode.
+
+There is a sample device driver in the course notes that implements all of the IO operations above. Course notes also explain how to
+use that file to do stuff from user space as well.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
