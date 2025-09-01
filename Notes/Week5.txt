@@ -1,0 +1,306 @@
+what happens if we do "make install" twice (without removing the original one)?
+-----------------------------------------------------------------------------
+Second one overwrites the first one. However the files for the first one are stored in backup files with .old extension in the root
+directory of the source code.
+
+Raspberry Pi 5
+--------------
+Raspberry Pi 5 doesn't use GRUB, it uses a custom bootloader. Under /firmware, there is a config file which needs to be modified to
+boot with the new kernel. Device tree files also need to be used since Rasp. Pi is an embedded system, but they are also hard to do
+from scratch and require knowledge of hardware. These are uesd to let the OS know which hardware is present and can be acquired from
+the files on the Rasp. Pi OS. The same thing is done on PCs using the ACPI protocol, so no such device tree files are necessary.
+The easiest way to get an ARM based Linux system is buying a Rasp. Pi 5. Don't forget to buy a high power adapter and a fan and a 
+cooler with it.
+Also, one easy way to use Rasp. Pi 5 is once the hardware montage is complete and the initial OS installation is complete (which
+requires a monitor), a remote desktop app (such as xrdp) can be used to remotely access the computer, which eliminates the need for an
+external monitor every single time.
+
+In each directory, there are also Kconfig files along with Makefiles. These are used to control how our code can be configured through
+"make menuconfig". A similar operation to that of Makefiles need to be done for Kconfig files when adding new directories or sources.
+1) If we are adding .c files into an already existing directory, we don't need to do anything. Existing Kconfig files are able to
+do the job.
+2) If we are adding a new directory, we need to add a Kconfig file as well next to the Makefile. In order to make the Kconfig in the
+upper directory aware of the Kconfig in our new directory, the following line needs to be added:
+
+source "path/to/new/Kconfig/relative/to/source/root"
+For example:
+source "drivers/mydriver/Kconfig"
+
+The new Kconfig file can something like the following:
+ 
+config MYDRIVER
+	tristate "My Character device driver"
+	default y
+	help
+	Enable this for My Device support.
+	It can be either statically included or modularized.
+
+The format for the Kconfig files can be obtained from the following link:
+https://docs.kernel.org/kbuild/kconfig-language.html
+
+This also allows us to write obj-$(CONFIG_MYDRIVER) instead of obj-y when writing Makefiles, which then allow for compatibility with
+"make menuconfig".
+
+Also adding obj-y += mydriver/ line to the Makefile in the upper directory shouldn't be forgotten. This line can also be written as
+obj-$(CONFIG_MYDRIVER) += mydriver/ however this isn't really recommended because mydriver folder can have extra things that might
+need to be included even though mydriver isn't selected from "make menuconfig".
+
+When dealing with modules or drivers/ folder, ALWAYS do "make modules_install" because otherwise, even with small changes, paths
+might change, which might cause the system to not be able to find the drivers during boot or other weird issues might pop up.
+
+SIDE NOTE: U-Boot is the bootloader that is most commonly used in embedded systems. But Rasp. Pi doesn't use this one, it uses its own
+custom bootloader.
+
+"printk" function writes the string into a queue known as "kernel ring buffer". The contents of this buffer can be displayed with the
+command "dmesg". This can be used to check if the changes we made to the kernel (such as adding drivers) were actually applied.
+
+KERNEL CERTIFICATE AND SIGNING
+==============================
+Signing the kernel helps prevent unwanted modifications to the hardware drivers. This is done for improving the security of the system
+and is done in all OSs. UEFI BIOSs doesn't boot unsigned kernels if Secure Boot is turned on. The signature check is done by:
+-The UEFI BIOS (if Secure Boot is on)
+-The bootloader
+-The kernel (when loading device drivers)
+
+First, "openssl" needs to be installed on the system. Once it is installed, signing is typically done as follows:
+-the following openssl command needs to be run, which will produce a .pem file that will be used when signing.
+
+openssl req -new -x509 -newkey rsa:4096 -keyout signing_key.priv -out signing_key.pem -days 3650 -nodes \
+-subj "/CN=Custom Linux Kernel Signing Key"
+
+-Then, this .pem file is placed under "certs" folder under the root directory of the kernel source code.
+-Afterwards, the following key changes is done to the .config file:
+
+CONFIG_MODULE_SIG=y
+CONFIG_MODULE_SIG_ALL=y
+CONFIG_SYSTEM_TRUSTED_KEYRING=y
+CONFIG_SYSTEM_TRUSTED_KEYS="certs/signing_key.pem"
+
+-At this point, the device drivers are signed. The smallest change to the kernel will cause incompatibility with the certification
+and the modified code will not be booted by the previously mentioned systems that check for the certificate. These operations are
+used to sign the drivers. Signing the kernel needs to be done separately.
+
+To sign the kernel:
+-The public and private keys from the .pem file needs to be separated:
+$ openssl x509 -in signing_key.pem -outform DER -out db.crt
+# openssl rsa -in signing_key.pem -outform PEM -out db.key
+
+-Then the kernel can be signed with sbsign:
+sbsign --key db.key --cert db.crt --output vmlinuz.signed vmlinuz-6.9.2-custom
+
+This kind of kernel signing is rarely done. When compiling (building) a device driver in the same machine, those device drivers will
+also be signed with the same sign knowledge. So what if we wanna load a device driver that was compiled on another machine? Obviously,
+since they weren't signed with our key, they won't work. By default, if a device driver's signature doesn't match the expected one,
+kernel still loads them by outputting a warning to the kernel ring buffer in order to save the users the hassle of signing every
+single driver.
+If a stricter approach is needed, in those cases (a.k.a something more than just a warning), this can be set up using the .config file
+by setting the following:
+
+CONFIG_MODULE_SIG_FORCE=y
+
+If using menuconfig, this can be set using: Enable loadable module support -> Module signature verification -> Require modules to be
+validly signed
+
+If this is selected, the kernel will not load device drivers that weren't signed with our own key. If we still wanna use a driver
+written by someone else after enabling this setting, we need to sign that driver with our own key or the distribution's public key.
+This can be done by using the sign-file script inside the kernel source codes. This script can be used as follows:
+
+
+Note: Script means "betik" in Turkish apparently.
+
+======================================================================================================================================
+FAKE ROOT SYSTEM CREATION
+-------------------------
+In order for a Linux system to boot properly, the root file system needs to have some folders to exist. So how can we create this
+folder structure without setting up a Linux distro from scratch? This can obviously be done manually but this is time consuming and
+error prone. There are programs that are created to automatically make this. In embedded systems, "BusyBox" is commonly used for this
+purpose. "Buildroot" and "Yocto" are also other alternatives but they serve more general purposes as well. "debootstrap" can be used
+to download Debuan based root file system from the Internet and create it locally. In order to download debootstrap:
+
+$ sudo apt-get install debootstrap
+
+debootstrap program has a lot of arguments. Here is the one for specifying the CPU architecture:
+--arch: Default is the current machine's architecture. For 64 bit Intel, "amd64", for 32 bit ARM, "armhf", for 64 bit arm, "arm64",
+for Intel based CPUs, "amd64" can be used.
+
+An example usage of this command is as follows:
+
+$ sudo debootstrap --arch=amd64 --include=systemd bullseye myrootfs 
+
+Here, "bullseye" specifies the Debian variant. "myrootfs" is the folder into which the root file system will be installed. Finally,
+"http://deb.debian.org/debian/" is the repository from which the packages will be installed. The --include flag can be used to install
+specific packages alongside the root file system as well. --exclude is also an option to prevent some packages to be installed. For
+specifying multiple packages, the packages can be separated by a comma. For example:
+
+$ debootstrap --arch=amd64 --include=systemd,sudo,gcc bullseye myrootfs http://deb.debian.org/debian/
+
+In order to do this operation for another system with a different architecture, a static version of qemu and binfmt needs to be
+installed with the following:
+
+$ sudo apt install qemu-user-static binfmt-support
+
+After running debootstrap as shown above, the following can be used to change the root directory:
+
+$ sudo chroot myrootfs
+
+IMPORTANT DATA STRUCTURES IN LINUX KERNEL
+-----------------------------------------
+The fundamental data structures (abstract data types) used in linux kernel are as follows:
+-Doubly linked lists
+-Bitmaps
+-Hash tables
+-Balanced trees & Radix trees
+-Queues
+
+These data structures are generalized inside the kernel. Meaning, they are designed in such a way that they can be used in any
+context.
+
+Linked Lists
+------------
+Almost all linked lists in the kernel are doubly linked lists. One of the only places where singly linked lists are used are the
+file systems. General view of a linked list is as follows:
+
+struct node
+{
+    /*node contents*/
+    struct node* next;
+    struct node* parent; //Only for doubly linked lists
+};
+Reminder: The very first node is called the head.
+
+Since parent node cannot be accessed in singly linked lists, deletion in O(1) time isn't possible. Therefore usage of doubly linked
+lists is much more common.
+
+Allocation for linked lists: They obviously require memory allocation when new nodes are required. For this, instead of using heap
+algorithms such as the one used in malloc, a method known as slab allocation is used, which allows memory allocation in O(1) time.
+
+Also, it is possible that a single node can be used by multiple linked lists.
+
+The implementations for of linked lists are done in <list.h> with inline functions. Since kernel is compiled using the optimization
+flags of gcc, these inline functions work as macros when the code is compiled. This also means that these functions in <list.h> are
+functions that are just a few lines long.
+
+In the kernel, there are measures taken to make sure linked lists work with cache optimization as much as possible. Something to do
+with "locality of reference". TODO: Search what this is.
+
+It should be noted that a single node will take more space in memory if using a doubly linked list rather than a singly linked list.
+But deleting a node with a known address (aka the currently worked on node) is much easier with doubly linked lists, which is
+something that is frequently needed.
+
+If the last node is pointing at the first node, then that is called a circular linked list.
+
+WHY USE LINKED LISTS
+--------------------
+1) They can help in situation of heap fragmentations.
+2) Expanding resizable arrays can be slower than expanding linked lists since the whole array might change place in memory to be able
+to expand properly.
+3) If insertion/deletion in the middle of the array is done frequently, linked lists are more efficient at doing so than raw arrays.
+4) If accessing the elements with an index is a frequent operation, raw arrays should be preferred since they achieve this with an
+O(1) time complexity. For linked lists, this is an O(n) operation and is therefore slower to do.
+
+HOW TO MAKE A GENERAL LINKED LIST THAT CAN BE USED IN ALMOST ANY CONTEXT
+------------------------------------------------------------------------
+Linked list implementation in Linux kernel can be found under include/linux/list.h
+The functions inside these file are declared as static inline. During kernel compilation, optimization flags for gcc are set so that
+the compiler can treat these functions as macros during compilation.
+
+In Linux, the nodes of linked lists are represented by a structure called list_head. The actual data is managed by the programmer, in
+SAMPLE structs. This way, the SAMPLE structs created by the programmer add a list_head member, which can then be used to utilize the
+kernel codes for dealing with linked lists. The rest of the struct holds the actual data of the node. The details of this process are
+explained below with code examples. 
+
+One important problem is how to get the node data from list_head members. That is done by computing the offset of the list_head member
+inside the struct. This offset can be subtracted from the actual address of the address of list_head member variable. This then gets
+the starting address of the SAMPLE itself.
+
+The offset can be found with the standard C macro "offsetof(type_name, element_name)". Example usage:
+
+#include <stdio.h>
+#include <stddef.h>
+
+//This is an example implementation of offsetof, which is a common way of implementing it.
+//Casting 0 to a pointer and taking its address is not undefined behavior. C standards define that in this operation, the actual
+//address 0 is never actually accessed.
+//0 is cast to type*, which enables access to the variable member. Then, the address of member is taken and since the struct starts
+//from address 0, it's address is the offset of member. Then, finally, to use this as an integer, the result is cast to size_t.
+#define myoffsetof(type, member)	((size_t)&((type*)0)->member)
+
+struct list_head
+{
+	struct list_head* next;
+	struct list_head* prev;
+};
+
+struct SAMPLE
+{
+	int a;
+	int b;
+	struct list_head node;
+	int c;
+};
+
+int main()
+{
+
+	size_t offset = offsetof(struct SAMPLE, node);
+	printf("%zd\n", offset);
+	return 0;
+}
+
+
+Now we can get the struct SAMPLE instance the node lives in with the following code:
+struct SAMPLE s;
+struct list_head* pnode = s.node;
+struct SAMPLE* ps = (struct SAMPLE*)((char*)pnode - offsetof(struct SAMPLE, node));
+
+That calculation is quite lengthy and that can also be turned into a macro:
+
+#define container_of(ptr, type, member) ((type*)((char*)ptr - offsetof(type, member)))
+
+Then, the code becomes:
+struct SAMPLE s;
+struct list_head* pnode = s.node;
+struct SAMPLE* ps = container_of(pnode, struct SAMPLE, node);
+
+A single sample can also contain multiple list_head member variables. Why this is done idk.
+
+Now let's make a linked list from SAMPLEs:
+
+struct list_head head;
+
+or not, the time ended so no linked list from SAMPLEs this week...
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+ 
+
+
+
+
+
+
+
+
+
+
+
+
+
