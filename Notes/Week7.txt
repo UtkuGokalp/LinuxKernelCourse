@@ -138,6 +138,12 @@ There is no need to recompile the whole kernel for a few examples. What we can d
 driver is beyond the scope of this course. However, how to write a barebones device driver will be explained before getting into the
 examples.
 
+First, let's get the including out of the way. /lib/modules/$(shell uname -r)/build/include is the assumed root directory by the
+drivers' build system when writing kernel modules or device drivers. The "build" directory in here is actually a symbolic link. This
+link refers to the main directory where the kernel sources and header files are in. This means that when including, the source root
+ends up being the "include" directory in the kernel source codes. So when a code does "#include <linux/module.h>", this means the
+included file will actually be the linux/module.h inside the include/ directory of the kernel source.
+
 In order to compile device drivers, there needs to be some headers in the system. These header files can be installed with:
 
 $ sudo apt-get install linux-headers-$(uname -r)
