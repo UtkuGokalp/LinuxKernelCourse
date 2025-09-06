@@ -1,0 +1,214 @@
+This week will start with some practical examples of last week's topics. These examples assume a character device driver is being used
+as it was explained last week.
+
+First examples will be about traversing task_struct linked lists.
+Risk: While traversing a task_struct linked list, if we get very unlucky, a task might end and the kernel might remove its task_struct
+at the same moment that we are accessing the task_struct of that very-recently-ended task. This causes an undefined behavior. In
+user-space, the CPU handles this undefined behavior and the system can recover. In kernel space however,the  whole system might crash.
+Writing critical codes in the kernel for stuff like this will be explained in more detail later.
+
+To prevent such cases, Linux kernel used to use a read-write lock mechanism, which would lock the whole linked list (or whatever is
+being worked on at that moment) and then make everything else wait. In order to remove the waiting process, newer versions switched
+to the read/copy/update (rcu) system. rcu system is a lock-free system, meaning it uses synchronization objects that doesn't use
+locks. The system is designed to bring the waiting down to a minimum or eliminate it entirely. This increases the performance but
+makes the system more complicated.
+The name of the earlier system was read/write lock/free mechanism. The "update" part of rcu corresponds to the "write" part of the rw
+system.
+
+This means that when we write our own code, we need to obey by the rules of the systems that are already in place in the kernel. Here
+are some foundational informations in order to use this system in our own codes.
+-Before starting to traverse the linked lists that use RCU mechanism, rcu_read_lock() function needs to be called. When ending the
+traversal, rcu_read_unlock() function needs to be called. These functions can be found in <linux/rcupdate.h> and their signatures are
+as follows:
+
+<linux/rcupdate.h>
+
+void rcu_read_lock(void);
+void rcu_read_unlock(void);
+
+So when writing code, it should look like this:
+
+	rcu_read_lock();
+	//Our code goes here...
+	rcu_read_unlock();
+
+When accessing the nodes of RCU-based linked lists, rcu_dereference() macro needs to be used. As for the parameters of this macro, the
+prev or next nodes of the list need to be passed, depending on which one we want to access. This way, all the task_struct objects that
+currently exist in the system can be traversed via the sample code below (remember that container_of and list_entry macros are total
+equivalents):
+
+    #include <linux/module.h>
+    #include <linux/kernel.h>
+    #include <linux/rcupdate.h>
+
+    MODULE_LICENSE("GPL")
+
+    static int test_module_init(void);
+    static void test_module_exit(void);
+    void walk_tasks(void);
+
+    static int test_module_init(void)
+    {
+        printk(KERN_INFO "initiating...");
+        walk_tasks();
+        return 0;
+    }
+
+    void walk_tasks(void)
+    {
+        struct task_struct *ts;
+        struct list_head *lh;
+        ts = &init_task;
+
+        rcu_read_lock();
+
+        lh = rcu_dereference(ts->tasks.next);
+        do {
+            //The line below can also be achieved with "ts = list_entry(lh, struct task_struct, tasks)"
+            ts = container_of(lh, struct task_struct, tasks);
+            printk(KERN_INFO "PID = %d, COMM = %s", ts->pid, ts->comm);
+            lh = rcu_dereference(ts->tasks.next);        
+        } while (ls != &init_task.tasks);
+
+        rcu_read_unlock();
+    }
+
+    static void test_module_exit(void)
+    {
+        printk(KERN_INFO "exiting...");
+    }
+
+    module_init(test_module_init);
+    module_exit(test_module_exit);
+
+This sample code can then be compiled and installed with insmod (and removed with rmmod) as explained in previous week. Once it is
+installed, the printed PID and COMM values can be viewed with dmesg. Note that the COMM value is a string that can have a maximum of
+16 characters. This value describes the task_struct and it is created by refering to the file name of the program that is started via
+the "exec" functions. For threads that are created via pthread_create, the COMM variable also contains a text. This text can be
+changed via the "prctl" library function. Under the hood, this function calls "sys_prctl". Names of threads can also be changed via
+"pthread_setname_np", but this is not a POSIX function (np stands for non-portable). It is a lib-c function.
+
+In order to traverse through the tasks list, the kernel codes also include a macro named "for_each_process". This macro is given a
+pointer with the of type task_struct. In each iteration, this macro puts the address of the next process into the given pointer.
+This macro is found in <linux/sched/signal.h> but it is also included in <linux/kernel.h> and since that is usually included by
+default in a new source file, separately including the exact file it is written in isn't necessary. Here is how this macro can be
+used:
+
+    void walk_tasks(void)
+    {
+        struct task_struct *ts;
+        rcu_read_lock();
+
+        for_each_process(ts)
+        {
+            printk(KERN_INFO "PID = %d, COMM = %s", ts->pid, ts->comm);
+        }
+
+        rcu_read_unlock();
+    }
+
+for_each_process might come accross as if it is looping through only the main threads for each process. This isn't the case. It
+traverses through each task_struct, meaning every single process and thread that currently exists on the system.
+
+So what if we want to traverse through only the main threads (aka only the processes themselves)? This can actually be done with just
+an if statement:
+
+    void walk_tasks(void)
+    {
+        struct task_struct *ts;
+        rcu_read_lock();
+
+        for_each_process(ts)
+        {
+            if (ts->pid == ts->tgid) //If is main thread
+            {
+                printk(KERN_INFO "PID = %d, COMM = %s", ts->pid, ts->comm);
+            }
+        }
+
+        rcu_read_unlock();
+    }
+
+There are no macros for traversing through only the main threads.
+
+
+Now let's move on to an example that uses current() macro. We rename walk_tasks to walk_current_process_threads(). Other than that,
+the code is the same. Here is the implementation:
+
+    void walk_current_process_threads(void)
+    {
+        
+    }
+
+
+IMPORTANT NOTE: During the class, it was found that the later versions of the kernel actually changed some stuff. Some stuff only
+represent processes (aka main threads) and not all of the threads. The course notes corrects these. However I don't have time to fix
+them in my own notes, at least not right now. What this means for this week is that for_each_process traverses through all the main
+threads, not all of the threads (which makes no sense to me, the first code actually prints the PIDs in incrementals of one, meaning
+every thread whereas if (ts->pid == ts->tgid) part doesn't do that. If this was actually the case, the PIDs should've been the same
+in both of the codes. idk what but something is going on.
+
+Things got really mixed up all over the place. This part of the notes isn't entirely correct!!!
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
