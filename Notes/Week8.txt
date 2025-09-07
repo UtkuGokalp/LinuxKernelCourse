@@ -131,54 +131,158 @@ an if statement:
 
 There are no macros for traversing through only the main threads.
 
-
-Now let's move on to an example that uses current() macro. We rename walk_tasks to walk_current_process_threads(). Other than that,
-the code is the same. Here is the implementation:
-
-    void walk_current_process_threads(void)
-    {
-        
-    }
-
-
 IMPORTANT NOTE: During the class, it was found that the later versions of the kernel actually changed some stuff. Some stuff only
 represent processes (aka main threads) and not all of the threads. The course notes corrects these. However I don't have time to fix
 them in my own notes, at least not right now. What this means for this week is that for_each_process traverses through all the main
 threads, not all of the threads (which makes no sense to me, the first code actually prints the PIDs in incrementals of one, meaning
 every thread whereas if (ts->pid == ts->tgid) part doesn't do that. If this was actually the case, the PIDs should've been the same
-in both of the codes. idk what but something is going on.
+in both of the codes. idk what but something is going on. Things got really mixed up all over the place. This part of the notes isn't
+entirely correct!!!
 
-Things got really mixed up all over the place. This part of the notes isn't entirely correct!!!
+CORRECTION BY TUTOR THE NEXT DAY: for_each_process() really only traverses through only the main threads, NOT all of the tasks_structs
 
+Alternative walk_processes implementation:
 
+    void walk_tasks(void)
+    {
+        struct task_struct *ts;
 
+        rcu_read_lock();
 
+        ts = next_task(&init_task);
+        do {
+            printk(KERN_INFO "PID = %d, COMM = %s", ts->pid, ts->comm);
+            ts = next_task(ts);
+        } while (ls != &init_task.tasks);
 
+        rcu_read_unlock();
+    }
 
+next_task macro (found in <linux/sched/signal.h>) takes in the address of a task_struct and returns the address of the next task by
+respecting the needs of the kernel's RCU system.
 
+There is also a list_for_each_entry_rcu macro that traverses through linked lists in a way that is suitable for the RCU mechanism:
 
+    void walk_tasks(void)
+    {
+        struct task_struct *ts;
 
+        rcu_read_lock();
 
+        list_for_each_entry_rct(ts, &init_task, tasks, tasks) {
+            printk(KERN_INFO "PID = %d, COMM = %s", ts->pid, ts->comm);
+        }
+        
+        rcu_read_unlock();
+    }
 
+This can be found in <linux/rculist.h> There is also list_entry_rcu(ptr, type, member) macro that returns the address of the list
+entry.
 
+Now let's move on to examples about traversing through threads. Kernel modules are insufficient when we want to traverse through the
+threads of a process. Because the functions inside the kernel modules cannot be called externally (aka from the threads of the
+process). When we load a kernel module, its init function is run. If we use the current macro in this init function, we will access
+the task_struct address of the insmod process' related thread (most likely its main thread) that loads the kernel module. Similarly,
+if we use the current macro in the exit function of the kernel module, same thing will be valid for the rmmod process.
 
+We can use the device drivers in order to do our thread traversal tests. The functions inside the device drivers can be called from
+user space threads as well. When current is called in these functions, the address of the task_struct of the thread that calls the
+function will be obtained. We can use the ioctl function of our bare-bones device driver for these operations. Here is an example:
 
+    static long ioctl_test(struct file *filp, unsigned long arg)
+    {
+        walk_process_thread();
+        
+        return 0;
+    }
 
+    void walk_process_thread(void)
+    {
+        struct list_head *lh;
+        struct task_struct *ts;
+        rcu_read_lock();
 
+        lh = rcu_dereference(current->signal->thread_head.next);
 
+        do {
+            ts = container_of(lh, struct task_struct, thread_node);
+            printk(KERN_INFO "PID = %d, COMM = %s", ts->pid, ts->comm);
+            lh = rcu_dereference(ts->thread_node.next);
+        } while (lh != &current->signal->thread_head);
 
+        rcu_read_unlock();
+    }
 
+Note: ioctl stands for input/output control.
 
+One of the GNU extensions used in Linux kernel is the ?: operator. This is a shorthand for the standard ternary operator in C. It's
+syntax is:
 
+    condition ?: false_value
 
+And is the equivalent of:
 
+    condition ? condition : false_value
 
+An example code:
 
+    int a, b;
+    //a and b initialization codes go here
+    int c = a == b ?: 30; //Equivalent statement is int c = a == b ? a == b : 30.
 
+It is better to start from the main thread of a process when using the next_thread() macro, even if the code is working from a
+different thread. This way, every thread will definitely be considered. This has to do with how the next_thread() macro is written.
+It ends the loop when it arrives to the main thread again, meaning the kernel itself expects the loop to be started from the main
+thread. Apparently there can even be infinite loops if the loop doesn't start from the main thread.
 
+There are a lot of code examples I cannot write them and also listen to the class at the same time. The rest can be found in the
+course notes themselves taken by the tutor.
 
+for_each_process_thread(p, t) macro can be found under <linux/sched.h/signal.h> and is defined as:
 
+#define for_each_process_thread(p, t) \
+        for_each_process(p) for_each_thread(p, t)
 
+This macro is used by giving it two task_struct pointers. In each iteration, the task_struct pointer of the main thread is placed into
+the first parameter and the thread of the process (I think this part means the current thread, and idk how it differs from the current
+macro) into the second parameter. This means that p and t will point to the same memory address when the current thread is the main
+thread. This means that when using this macro, one can check for the equality of the pointers to determine whether the current
+iteration is over the main thread or not. It should be noted that since this is actually a double for loop, break won't work as
+expected when using this macro.
+
+static void walk_all_threads(void)
+{
+    struct task_struct *pt;
+    struct task_struct *pp;
+    rcu_read_lock();
+    for_each_process_thread(pp, pt)
+    {
+        if (pt == pp) //Main thread
+        {
+            printk("Process main thread PID = %d, COMM = %s", pp->pid, pt->comm);
+        }
+        else //Non-main thread
+        {
+            printk("	Thread PID = %d, COMM = %s", pp->pid, pt->comm);
+        }
+    }
+    rcu_read_unlock();
+}
+
+The code above will write a clearly readable string to the kernel ring buffer about the processes and their related threads.
+
+Finally, there are code examples about traversing through the subprocesses of a given process in the course notes. One trick when
+doing fork operations is using exit() or _exit() when we want the child process to end its tasks. Example:
+
+pid_t pid = fork();
+
+if (pid == 0)
+{
+    //Child process stuff
+    _exit(0); //Child process exits successfully. Since this is inside the if block, main thread doesn't access here so it doesn't end
+}
+
+//Stuff that main thread needs to do and child process shouldn't touch.
 
 
 
