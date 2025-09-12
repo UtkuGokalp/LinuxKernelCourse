@@ -1,0 +1,292 @@
+When using a linked list in the kernel, first a head needs to be created.
+NOTE: If the list is empty, both next and prev pointers point to LIST HEAD, not NULL! Meaning:
+struct list_head
+{
+	struct list_head *next, *prev;
+};
+
+int main()
+{
+	struct list_head head = { &head, &head }; //This is valid C syntax (a.k.a not ub), but it uses garbage value to initialize
+}
+
+There is also the following macro in Linux kernel to facilitate the above operation:
+
+#define LIST_HEAD_INIT(name) { &(name), &(name) }
+#define LIST_HEAD(name) struct list_head name = LIST_HEAD_INIT(name)
+
+This allows us to just do:
+
+int main()
+{
+	LIST_HEAD(head);
+}
+
+Of course the following can also be used:
+
+int main()
+{
+	struct list_head head = LIST_HEAD_INIT(head);
+}
+
+ADDING ELEMENTS TO A LINKED LIST
+================================
+The functions and macros that will be explored in this section can be found under <linux/list.h>
+
+When a new node is added to a linked list, the new node's next becomes the first node (to make the linked list circular). The prev
+pointer points to the old last node. There are no NULLs. The prev node of the first node also points to the final node, so no NULLs
+there either. In order to add a new list_head node to the beginning of a linked list, "list_add" function can be used. The signature
+of the list_add is as follows:
+
+void list_add(struct list_head *new, struct list_head *head);
+
+The first parameter is the address of the node to be added, the second parameter is the address of the first node.
+
+Here is a sample code:
+
+   LIST_HEAD(head);
+
+    struct SAMPLE {
+        int a;
+        struct list_head link;
+    };
+    
+    int main(void) {
+        struct SAMPLE *ps;
+
+        for (int i = 0; i < 10; ++i) {
+        if ((ps = (struct SAMPLE *)malloc(sizeof(struct SAMPLE))) == NULL) {
+            fprintf(stderr, "cannot allocate memory!...\n");
+            exit(EXIT_FAILURE);
+        }
+
+        ps->a = i;
+        list_add(&ps->link, &head);
+    }
+    
+
+IMPORTANT NOTE: There are functions in the kernel that start with two underscores (e.g. __list_add()). The two underscores indicate
+that these are kernel's internal functions and are not meant to be used by outsider code. Although list_add() function is a one-liner
+and internally uses __list_add(), it is still expected for guest codes to use list_add() and not __list_add(). __ functions can also
+be thought of as low-level codes. In object oriented terms, __ prefixed functions are meant to be private functions.
+
+IMPORTANT NOTE #2: Standard C functions like malloc doesn't exist in kernel mode and therefore cannot be used. Some of those functions
+have their own kernel equivalents and those ones can be used (e.g. the equivalent of malloc is kmalloc). The point of using them here
+is just to make the example more clear, not to write actual kernel code.
+
+In order to add nodes to the end of the linked list, "list_add_tail" function can be used. It's signature and parameters are the same
+as the list_add function:
+
+void list_add_tail(struct list_head *new, struct list_head *head);
+
+A linked list can be traversed via the following loop:
+
+    for (struct list_head *lh = head.next; lh != &head, lh = lh->next) {
+        
+    }
+
+The body of the loop can look like the following:
+
+    ps = container_of(lh, struct SAMPLE, link);
+
+This line allows us to get the struct SAMPLE that we need in that iteration of the loop so that we can access its data.
+
+Pay attention that the first node is ignored in the loop above. This is intentional, as this is a dummy node that doesn't contain data
+and is just used to detect whether we finished traversing through the list or not.
+
+There is also a macro version of this loop:
+
+    #define list_for_each(pos, head) \
+            for (pos = (head)->next; !list_is_head(pos, (head)); pos = pos->next)
+
+Which can be used like this:
+
+    list_for_each (lh, &head) {
+        ps = container_of(lh, struct SAMPLE, link);
+        printk(KERN_INFO "%d\n", ps->a);
+    }
+
+There is also list_for_each_entry:
+
+    #define list_for_each_entry(pos, head, member)			\
+	for (pos = list_first_entry(head, typeof(*pos), member);	\
+	     !list_entry_is_head(pos, head, member);	                \
+	     pos = list_next_entry(pos, member))
+
+The first parameter of list_for_each_entry is a pointer to the actual struct. The macro sets this pointer to the address of the next
+node in every iteration. The second parameter is the head node's address and the third one is the name of the list_head variable in
+the structure.
+
+The difference is between the two macros is that, if the names of the linked list macros or functions include the word "entry", this
+indicates that they return the address of the actualy struct itself. If "entry" isn't in the name, that means they return list_head
+pointers and not the struct that contains the actual data.
+
+The elements can be deleted with the function "list_del", which has the following signature:
+
+    void list_del(struct list_head *entry);
+
+Here, the parameter is the address of the node to be deleted. When deleting, the next and prev variables are given the special values
+called "LIST_POISON1" and "LIST_POISON2". These are just details for our purposes.
+
+The following is a code example for list_del (ps_del is the address of the struct, NOT the list_head node, to be removed from the
+list and is assumed to be set prior to the following code):
+
+    list_for_each(lh, &head) {
+        ps = container_of(lh, struct SAMPLE, link);
+        printf("%d ", ps->a);
+    }
+    printf("\n");
+
+    list_del(&ps_del->link);
+
+    list_for_each(lh, &head) {
+        ps = container_of(lh, struct SAMPLE, link);
+	printf("%d ", ps->a);
+    }
+    printf("\n");
+
+Note that we don't give &ps_del to the function list_del, but instead we give &ps_del->link. This is an important detail.
+
+There are no specific insert functions for linked lists in the kernel. This operation can already be achieved with the following line:
+
+    list_add(&ps->link, &ps_insert->link);
+
+Functions in include/linux/list.h whose name end in _rcu (read, copy, update) were added in later versions of Linux kernel. One of
+these functions' name is list_for_each_rcu, which is actually a macro. This macro provides a method for making operations for a
+writer, without making readers wait.
+======================================================================================================================================
+
+PROCESS CONTROL BLOCK (PCB)
+---------------------------
+Process: Currently executing program.
+Program: Mostly used for an executable file or a source file. When a program is run, it becomes a process. A single program can be run
+multiple times, in which case there are multiple processes that are created for each instance of the program.
+
+The process control block is the most important thing in OSes when it comes to process management. Each OS has a struct for the
+process control block, which is used for managing the processes. Some sources also use the term "process descriptor" instead of
+process control block, it is the same thing.
+
+The PCB contains all the information related to a process, such as (not limited to the ones below):
+-Process's credential information (account information like user ID, group ID)
+-Process ID (PID)
+-Subprocesses, friend processes
+-Status information
+-Required areas for context switching
+-Processes' RAM information, such as where the process is loaded inside RAM
+-Scheduler information of the process (e.g. scheduling policy, priority)
+-CPU usage statistics
+-Processes' signal informations
+-Informations required for inter-process communications
+-Process' current working directory
+-File information that the process opened
+
+This structure in Linux kernel is implemented with the name "task_struct" under <include/linux/sched.h>
+Threads are also considered processes in Linux kernel, therefore both threads and processes use "task_struct". When a new thread OR
+process is created, a task_struct is created for the newly created thread or process. task_struct used to be a small structure, but
+at this point, it is a big structure and even uses conditional compiling.
+
+In Linux systems, a new process is created via the POSIX function named "fork". This POSIX function calls the system function named
+sys_fork. In the new kernel version, sys_fork then calls the kernel function named kernel_clone. The task_struct is created by these
+functions in the heap area of the kernel.
+
+Each process in UNIX/Linux systems has a system-wide unique process ID. This process ID is used by functions that can be called from
+both the kernel space and the user space programs. Process ID is an integer used to represent a process. Process IDs can be learnt by
+using the command "ps". "ps -e" gives the process ID for all of the processes. In user space, "getpid()" POSIX function gets the PID
+of the currently running program. "getppid()" POSIX function gets the PID of the parent program (extra p stands for parent). Both
+the process' own ID and it's parent's ID is stored in the task_struct.
+
+The thread concept was brought into OSes in 1990s. However, various thread experiments were done before that time as well. Threads
+were added to Linux in version 2.0 for the first time, but then, through various additions and edits, thread structure was changed a
+bit.
+
+A process represents all of the information about the currently running program. However a thread just represents a flow. The thread
+that a process starts executing is called the "main thread". Threads can be creates from user space by using the system function
+"sys_clone".
+
+When threads were first introduced into UNIX-like OSes, different variants used different thread libraries. Afterwards, the concept of
+threads were added to POSIX standards. This led to the creation of portable POSIX thread functions. In order to implement these into
+the kernel, UNIX-like OSes (Linux very much included) had to make some changes to their kernels.
+
+In Linux, threads are also considered as processes. Meaning task_struct is also created for threads, they don't have a separate
+struct. The OS stores the threads of a process and their task_struct values in a linked list.
+Side note: In Windows, threads have their own separate structures that is different than the one used for processes.
+
+In UNIX/Linux systems, there is a strong parent/child relationship between processes and threads. When a process is created, most of
+its task_struct information is taken from the parent process. For example, when a program runs another program via fork/exec, the
+program that is newly run is given a lot of the properties of its parent program, such as it's user ID, working directory etc.
+
+In POSIX threading systems, there are no parent/child relationships in general. Meaning, except for a few exceptions, it doesn't
+matter which thread creates which thread.
+
+There are a lot of pointers in the task_struct. Some of these pointers might point to other structures, that might contain other
+pointers, which point to yet another place in memory. This means that the whole structure web is a very complex one. When a data is
+said to be in the task_struct, this might not necessarily mean it is directly available inside the task_struct. It might be included
+in another struct that can be accessed through a pointer in the task_struct.
+It should also be noted that copying the task struct is a shallow copy, meaning just copying it into a new variable won't change the
+data that the pointers point to. If we want a new copy of those datas as well, we need to make a deep copy. Remember that the 
+assignment operator does a shallow copy when used with structs. Shallow copy is done in most places and is more efficient when a new
+child process is being created.
+
+For example, the working directory of the process is actually held under "struct files_struct *files" member and it is not a direct
+member of the task_struct. struct files_struct is a struct that holds the information about the open files.
+
+Now, if both processes and threads are using task_struct, what does the scheduler schedule?
+The scheduler only schedules threads, not processes. The run queue of the scheduler can be assumed to only have task_structs. When a
+process is created, the task_struct that is created for that process is already acting like the main thread of the process. So simply
+working with threads in the context of the scheduler can be gotten away with.
+
+Linux systems used to support a single CPU. Then came the multiple CPU/core support (SMP, Symmetric MultiProcessing) in v2.0. When a
+thread is running, the global variable named "current" of type task_struct* points to the currently executing thread. There used to
+be a single "current". Now there are as many "current" variables as there are cores. The scheduler is responsible for updating the
+"current" variable during the context switch operation. It should be noted that all cores can be running different threads at the
+same time.
+The "current" variable used to be a pointer, just like written above. In the new kernels, however, it is turned into a macro that
+expands into the function called "get_current()".
+So how does this function find and return the currently executing thread's task_struct on the CPU or core? Linux kernel uses different
+techniques that are dependent on the platform and the CPU. These techniques are related to the kernel stack and CPU-specific global
+memory. We will be discussing these in another section. In order to shortly explain, the CPU or core that is currently running a given
+thread has a pointer that points to a specific location (this is done during context switching). The task_struct of the currently
+running thread is accessed using this pointer.
+
+In user space of UNIX/Linux systems, a new process is created with fork() and a new thread is created with pthread_create(). Both of
+these calls eventually use the same kernel functions:
+
+fork() in user space --> sys_fork() in kernel space --> kernel_clone() --> ...
+
+pthread_create() in user space --> sys_clone() in kernel space --> kernel_clone() --> ...
+
+The way pthread_create() works can change from library to library, but it eventually does these syscalls into the kernel.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
