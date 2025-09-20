@@ -1,0 +1,118 @@
+The "tasklist_lock" locking mechanism used by the kernel was stopped being exported to kernel modules and device drivers since
+v2.6.18. This is done to comply with the new RCU mechanism implemented into the kernel. tasklist_lock can still be used in codes and
+device drivers that will be embedded into the kernel itself.
+
+The RCU mechanism used by the kernel removes the waiting process in the case where there is only one writer and multiple readers.
+However, if there are multiple writers (updaters) to the data structure, these writers still need to be synchronized via typical
+read/write lock mechanisms. In order to achieve this, current kernels still use the tasklist_lock in order to synchronize the writes
+to the task_struct linked lists.
+
+HOW TO FIND task_struct INSTANCE FROM PID?
+==========================================
+As covered before, processes are represented by their PID values in user mode. However, the kernel uses the task_struct instances for
+threads and processes. Remember that some POSIX functions take in PID values as arguments. These POSIX functions usually directly
+syscall into the kernel. So, the kernel needs a fast way of finding the task_struct instances from their PIDs. Iterating over linked
+lists wouldn't be fast enough (O(n)). So the kernel uses hash tables to speed it up (O(1)). 
+
+Note: The kernel itself doesn't use PID values (there are some exceptions), PID is more about the user space. PID is basically an
+interface between the kernel and the user space.
+
+As a kernel developer, two things should be known:
+1) When a new process is created, how do we generate its PID?
+2) How do we find the task_struct instance of a process from its PID?
+
+Side note: The maximum amount of PIDs that is avaiable to the system can be found under "/proc/sys/kernel/pid_max".
+
+Generation Of PIDs:
+-------------------
+In earlier versions of the kernel, the PID generation was very simple. The kernel had a variable called "last_pid". When a new PID was
+to be created, search for an available PID would start from this variable. There was (and there still is) a max number of allowed
+PIDs. When there was an available PID before this max value, PID allocation could be done fast and easily. However, when the limit was
+reached, kernel would have to loop through all the PIDs until it found an available one (O(n) time complexity), which was much slower.
+
+In later versions, the kernel started storing the available PIDs in a bitmap data structure and also used special CPU instructions for
+faster available PID search. However, as allowed max number of PIDs increased, the bitmap also started being insufficient (especially
+with the developments in the container technologies).
+
+In modern versions of the kernel, these available PID values are obtained by using bitmaps and radix trees, in a rather complicated
+way. There is a higher level function in the kernel called "alloc_pid", which is used to get an available PID value for the process
+to be created. The signature of alloc_pid is as follows (in modern kernel versions):
+
+    struct pid *alloc_pid(struct pid_namespace *ns, pid_t *set_tid, size_t set_tid_size);
+
+Older kernel versions had the signature as the following:
+
+    struct pid *alloc_pid(struct pid_namespace *ns);
+
+These functions aren't exported to the outside world.
+
+As it can be seen from the signatures, these functions don't return a PID value, they return a pid struct instance. This struct also
+had it's fair share of change in between kernel versions.
+
+In the very first version of the kernel (v0.01), the max number of tasks (NR_TASKS) was 64. However, this doesn't mean the PID values
+were only allowed to go between 0-63 or 1-64. Following the POSIX standards, this number could be a larger number as well. The thing
+that really matters is that the PID of all 64 tasks need to be unique. As long as that requirement is met, the PID can be any positive
+integer.
+
+In later versions (v2.4 versions), the kernel has a heap system and the PIDs are allocated from the kernel heap. In these versions,
+PID search was done in a linear fashion (O(n)).
+
+Starting from v2.6 kernels, PID search started to be done using hash tables and radix trees for faster operations.
+
+The max PID value was read from a file (inside /etc/sysctl.conf there is a line called kernel.pid_max = value) as a parameter
+starting with kernel v2.6. In v2.2 and v2.4, this was a fixed number and its value was 32768 (0x8000 aka 2^15). In v0.01, the max
+value wasn't specified and therefore could be any value within the range of the long type.
+
+In modern versions of the kernel, PID limit is defined as the following:
+
+    #define PID_MAX_LIMIT (IS_ENABLED(CONFIG_BASE_SMALL) ? PAGE_SIZE * 8 :\
+                          (sizeof(long) > 4 ? 4 * 1024 * 1024 : PID_MAX_DEFAULT))
+
+As it can be seen, if CONFIG_BASE_SMALL parameter is set to 'y', the limit becomes 32768, otherwise (by default CONFIG_BASE_SMALL
+param is set to 'n'), the limit is 4194304 if the type long is larger than 4 bytes (64 bit systems). If long is smaller than 4 bytes
+(32 bit systems), this value is set to PID_MAX_DEFAULT:
+
+    #define PID_MAX_DEFAULT (IS_ENABLED(CONFIG_BASE_SMALL) ? 0x1000 : 0x8000)
+
+The max PID value can be set from "/proc/sys/kernel/pid_max" after kernel is compiled. It can also be decreased via the "sysctl"
+program but cannot be increased with it. "sysctl" is a user-space command-line utility program (/sbin/sysctl) and read/writes the
+kernel parameters exposed in "/proc/sys/".
+
+There are different reasons why there is a maximum limit for PIDs. It helps with searching speed, determining data structure sizes,
+performance improvements etc.
+
+It also worth noting that the number of task_struct instances currently active in the system cannot be larger than the maximum PID
+limit. However there are other higher priority factors that limit this number, such as RAM and CPU constraints, max number of threads
+allowed in "/proc/sys/kernel/threads-max" etc.
+
+Changing the max number of threads can be done in two ways:
+-Changing the value in "/proc/sys/kernel/threads-max" (temporary)
+-Changing the line "kernel.threads-max = value" in "etc/sysctl.conf" (permenant)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
