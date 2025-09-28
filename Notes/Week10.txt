@@ -1,0 +1,127 @@
+In order to delete a node from the hash table, "hlist_del" function is used, which can be found under "list.h"
+
+    void hlist_del (struct hlist_node *n);
+
+The next and pprev pointers of the deleted node are given LIST_POISON1 and LIST_POISON2 values, which are not valid addresses. Trying
+to use these values as if they were valid pointers will cause a "page fault".
+
+The final node's next pointer is set to NULL. "__hlist_del" that is used in hlist_del checks for this NULL address.
+
+Although they are rarely needed, there are functions to add nodes before (hlist_add_before) or after (hlist_add_behind) a given node:
+
+    void hlist_add_before(struct hlist_node *n, struct hlist_node *next);
+
+n is the node to be added, next is the node that the new node will be added before.
+
+    void hlist_add_behind(struct hlist_node *n, struct hlist_node *prev);
+
+n is the node to be added, prev is the node that the new node will be added after.
+
+When an hlist_node's address is known, it's containing struct can be accessed with container_of, just like we can in linked lists.
+However, there is a macro that can be used for hash lists as well:
+
+    #define hlist_entry(ptr, type, member)        container_of(ptr, type, member)
+
+In order to traverse through a chain in a hash list, hlist_for_each(pos, head) macro can be used. The first parameter (pos) takes a
+pointer of type hlist_node, second parameter takes a hlist_head pointer that holds the starting node of the linked list chain in the
+hash list. The loop goes on until pos becomes NULL (aka end of chain). At every iteration of the loop, the first pointer is changed
+to a new address.
+
+In the hlist_for_each macro, the address of the hlist_node instance is obtained, not the struct that the node is in. In order to work
+with the instance, there is also the hlist_for_each_entry(pos, head, member) macro. With this macro, pos isn't a pointer of type
+hlist_node but it is a pointer of type whatever struct we want to work with. The second parameter is the beginnning node of the linked
+list that represents the chain. The third parameter is the name of the member we want to access.
+
+There is also "hlist_for_each_entry_safe" macro, which does the same thing as hlist_for_each_entry but the safe version also checks
+for NULL pointers. This means that hlist_for_each_entry expects there to be at least one element in each chain, but the safe version
+can handle the case where some chains are empty, thanks to its NULL check. Same thing goes for "hlist_for_each_safe" and
+hlist_for_each.
+
+There are also other utility functions for hash tables in "list.h"
+
+In order to completely destroy a hash table, we need not only free the hash table, but also all of the members of the chains in the
+hash table. In general, this isn't required in the kernel (why??). However, there are code examples in the course notes that show how
+to do this.
+
+//LAST 2 HOURS' NOTES GO HERE (20.9.2025)
+
+In the v0.01 version of the kernel, there were a maximum of 64 task_struct instances allowed to exist at once. All of these were held
+in a global array named "task". The PID search was done by iterating through this array.
+
+In v2.2, hash tables were used to find task_struct instances from PIDs:
+
+    struct task_struct *find_task_by_pid(int pid) {
+        struct task_struct *p, **htable = &pidhash[pid_hashfn(pid)];
+        
+        for (p = *htable; p && p->pid != pid; p = p->pidhash_next)
+            ;
+        
+        return p;
+    }
+
+In v2.2, previously explained hash functions didn't yet exist in the kernel and therefore weren't used.
+
+In v2.6 the kernel held the PID struct for each PID and held them in a hash table in order to achieve fast searching. The following
+is the pid struct used in the kernel v2.6:
+
+    struct pid {
+        atomic_t count;
+        unsigned int level;
+        //list of tasks that use this pid
+        struct hlist_head tasks[PIDTYPE_MAX];
+        struct rcu_head rcul
+        struct upid nubers[1];
+    };
+
+1) The kernel creates a struct pid instance for each PID and stores it in a hash table.
+2) tasks element in the pid struct represent the root node for the linked list of that PID in the hash table.
+3) The kernel can find the task_struct instance associated with a PID by finding the pid struct instance in the hash table and then
+following the hash chain in the table (pid value ---> pid instance ---> linked list chain inside the pid instance).
+
+With the kernel v2.6, namespaces were started to be implemented into the Linux kernel. These versions also use namespaces for PIDs.
+The namespace implementation allowed the kernel to act as if there are multiple pid worlds, meaning two different namespaces can have
+the same PIDs and still be completely independent of each other. There is a default pid namespace that is created when the system is
+first started. These namespaces allowed the development of containerization technologies such as "Docker". It is important to note
+that these technologies doesn't do hardware virtualization, they use kernel's capabilities to achieve software virtualization.
+Namespaces makes it easier for such technologies to more easily use system's resources.
+
+With the implementation of namespaces, PIDs are not system-wide unique anymore, they are namespace-wide unique.
+
+Starting with kernel v2.6, "kernel/pid.c" file was used to do pid operations. The following functions are available:
+
+    struct task_struct *pid_task(struct pid* pid, enum pid_type type);
+    struct pid *find_pid_ns(int nr, struct pid_namespace *ns);
+    struct task_struct *find_task_by_pid_ns(pid_t nr, struct pid_namespace *ns);
+    struct task_struct *find_task_by_vpid(pid_t vnr); //vpid means virtual PID
+
+The main function is find_task_by_vpid(). It starts the search in the namespace from which the function is called. All of these
+functions do their job by calling each other:
+
+find_task_by_vpid --> find_task_by_pid_ns --> pid_task and find_pid_ns
+
+find_task_by_vpid finds the task_struct from pid from the current namespace
+find_task_by_pid_ns allows searching within a given namespace
+find_pid_ns finds the pid struct instance in the given namespace
+pid_task finds the task_struct instance's address by using the linked list chain from the given pid instance
+
+hlist_node link is inside the uid struct, and the uid struct is in the pid struct. (A lot of things were covered about this but I
+zoned out hard and can't catch up with all of that now)
+
+21.09.2025 somewhere after 11.00
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
