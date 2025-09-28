@@ -1,0 +1,115 @@
+27.09.2025 (Didn't attend the course at all, start from the beginning)
+Today, SATA and NVMe controllers are the most used disk controllers in PCs.
+
+======================================================================================================================================
+
+So how is the transfer done when disk controller used by the OS in order to read/write to sectors?
+This is not done by the CPU getting bytes from the controller and putting them into memory (RAM) because this will cause significant
+waste in terms of CPU time (disks are MUCH MUCH slower than CPU). In order to handle this transfer, helper controllers called DMAs
+(Direct Memory Access) are used. Typically, the code the CPU is executing (aka the OS) lets the disk controller know about the
+transfer request. Then, it programs the DMA controller so that the transfer will be put into RAM through the DMA controller. During
+the transfer, the CPU context switches in order to run another thread. When the transfer is finished, disk controller lets the CPU
+know through a hardware interrupt.
+
+1) The OS send the sector information to the disk controller (electrically).
+2) The OS programs the DMA controller with the help of the disk controller (electrically).
+3) For reading, disk controller reads the sectors and puts them to approprite places in RAM through DMA. For writing, the information
+from RAM is transferred to the disk unit through the DMA.
+4) When the transfer is complete, disk controller signals this to CPU through a hardware interrupt.
+5) Once CPU executes the codes for the transfer, it doesn't sit idle waiting for the transfer to be complete. It context switches into
+other threads to prevent idling.
+
+Modern DMA controllers that are in use today and the disk controller has a connection between them. Electrical programming of the DMA
+controller is mostly done by the disk controller.
+
+In HDDs, the disk unit also includes a cache. This way, when the disk controller asks for the same sectors, the disk unit can provide
+them without having to search for them if they are still in the cache. The size of these caches aren't very large, about 64-256 MB for
+HDDs with a size of 1 TB and above. This number is for modern HDDs, the first ones started with cache sizes of around 128 KB (with
+less storage space available as well). These caches are fast SRAMs chips or low-cost DRAM chips. 
+
+SSDs doesn't usually include these types of caches. They have higher size of DRAM chips and SSD caches also do more than cashing (such
+as wear leveling). Also, SSD caches are used more for writing rather than reading; writing to the same place in the SSD over and over
+again causes SSD wear. SSD caches helps with not doing this and distributes this wear over the SSD as much as possible to distribute
+the strain on the transistors (this is the wear leveling operation). From what I understand, it also delays writing to the same
+sector so that the transistors in that sector will have time to stabilize since writing to SSD require overvolting the transistors and
+surprise surprise, giving transistors more voltage than they're designed for makes them unstable and they might need some time to
+recover (MattKC reference lol).
+
+--------------------------------------------------------------------------------------------------------------------------------------
+Yukarida da belirttigimiz gibi bir disk biriminde transfer edilecek en kucuk birime sektor denilmektedir. Bir sektor 512 byte
+uzunlugundadir. Ancak aslinda sektor uzunluklari disk ureticilerine bagli olarak degisebilir bir niceliktir. Ancak 512 byte sektor
+uzunlugu gunumuzde standartlasmistir. Tabii zaman gectikce diskler buyudugu icin sektor uzunluklarinin da buyuyebilecegini soylemek
+istiyoruz. Ozellikle buyuk sistemlerde (cloud sistemleri, data center computers) 4k uzunlugunda sektorlere sahip sistemler de
+genellikle kullanilmaktadir. Disk birimi her sektore (ilk sektor 0 olmak uzere) bir numara vermektedir. Yani adeta her sektorun bir
+adresi vardir. Sektor fiziksel bir kavramdir. Disk denetleyicisi disk birimine transfer edilecek sektorlerin numaralarini
+iletmektedir. Bu bicimde mantiklsal sektor numaralari kullanilmadan once 80 lerde ve 90 larin yarisida sektorlerin yerleri
+"fiziksel koordinat sistemi" denilen "hangi yuz (head)", "hangi track", "hangi sektor dilimi" olarak uc parametreyle belirtiliyordu.
+
+Sektor kavrami aslinda dosya sistemleri icin kucuk bir depolama birimidir. Isletim sistemleri bir dosyanin parcasi olabilecek minimum
+disk alani icin sektor yerine "blok (block)" ya da "cluster" denilen daha buyuk birimleri kullanmaktadir. Block terimi daha cok
+UNIX/Linux sistemlerinde kullanilmaktadir. Microsoft ise block yerine "cluster" terminini kullanmaktadir. Bir block, ardisil n tane
+sektorden olusmaktadir. In practice, this n value is a power of 2. Ardisillik, hard disklerde onemli bir unsurdur. Cunku, hard
+disklerde en onemli zaman kaybi, mekanik bir birim olan disk kafasinin track hizasina cekilmesinde yasanmaktadir. Disk kafasi track
+hizasina cekildiginde, artik ardisil sektorler hic kafa hareketi yapilmadan okunup yazilabilmektedir.
+
+Peki neden isletim sistemi dosyalar soz konusu oldugunda bir dosyanin parcasi olabilecek en kucuk birim icin bir sektor degil de
+ardisil n tane sektor kullanmaktadir? Bunun birkac sebebi vardir:
+
+1) Dosyalarin parcalari disk uzerinde ardisil yerlerde olmak zorunda degildir. Dosyalarin parcalari disk uzerinde yayilmis bir bicimde
+bulunabilmektedir. Eger dosyalar cok fazla parcadan olusursa, hard disklerde bu parcalar disk uzerinde daha fazla yayilmis olur ve
+bunlara erismek icin daha fazla kafa hareketi yapilmasi gerekir, bu da erisimin alacagi zamani arttirir.
+
+2) Eger dosyanin parcalari sektor gibi kucuk birimlerden olussaydi bu parcalarin diskteki yerlerine iliskin "meta data" tablolari
+buyurdu. Bu da hem disk alanini hem de isletim sisteminin bellekte yaptigi duzenlemede alan verimsizligi olustururdu.
+
+3) CPU larin kullandigi sayfalama mekanizmasinda genellikle 4k uzunluklar kullanilmaktadir. Dosya parcalarinin 4k uzunlugun katlarinda
+olmasi dosya sistemi ile sayfalama sistemi arasinda uyumluluk yaratmaktadir. Bu da performans artisi saglamaktadir.
+--------------------------------------------------------------------------------------------------------------------------------------
+
+So what should be the minimum block size the OS uses?
+It cannot be too large because that will cause internal fragmentation (the allocated file size will be larger than what is actually
+necessary and there will be large, unused spaces that will essentially be wasted). It cannot be too small because then there will be
+many pieces of the file and the disk can get fragmented.
+
+This is decided based on the size of the disk itself. In small disk partitions, since the affect of internal fragmentation will be
+greater, the blocks can be of small sizes such as 1k. In middle-sized disks will be affected less from internal fragmentation, block
+sizes can be larger, such as 4k. In large disks, 8k-16k blocks are chosen.
+
+Block size choice is done when formatting a disk in Linux (which are done by mkfs.xxxx programs). The user can change the default
+block sizes determined by the mkfs programs should they choose to. However, most users don't need to choose this explicity, and in
+that case, the program determines the default block size depending on the size of the disk, as explained above.
+
+There is only a single root for the file system in Linux. Block devices (HDDs, flash belleks etc.) are mounted in a given directory.
+At the end of mount operation, the actual contents of the directory aren't displayed anymore, instead the mounted device's data is
+displayed. That means that in these systems, different folders, different block sizes can coexist. These informations and more can be
+accessed through the "stat" POSIX function or the "stat" command-line utility. In Linux systems, this information can be directly
+accessed using the dumpe2fs program on the block device.
+
+In Windows systems, the block system is used under the name "cluster". In these systems, the information can be accessed through the
+"chkdsk" GUI program or the "fsutil" command-line utility.
+
+OSs give a number to each block in order to deal with them easier. For example, assume the block size is 4k (typically 8 sectors). At
+this point, the disk partition now consists of blocks from the OS's point of view. The first 8 sectors of the partition (the 1st
+block) is now the 0th block. The next 8 sectors (the next block) is now the 1st block.
+
+OSs have a cache on the RAM to hold the latest read/written disk blocks. This is usually called "disk cache system of the OS". In
+Linux, it was called "buffer cache". This cache system was improved and renamed to "page cache". This disk cache systems allow for
+serious decrease in terms of disk access amount and improves the performace significantly. If OSs didn't use this cache system, the
+systems work very slowly. 
+
+Let's say we used the read/write POSIX functions on a file in a UNIX/Linux system. These call sys_read/sys_write under the hood. The
+OS then determines the block number this read/write call needs to work on. However these functions aren't immediately directed to the
+disk. They first check if the required partition exists in the cache system created on the RAM. If it does, these functions don't
+access the disk at all, meaning they don't get block by waiting for IO opereations. Otherwise, they go to the disk itself and put the
+related data into the cache system on RAM.
+
+So how is the data read from the disk if the RAM cache doesn't include it? In this case, the OS uses another unit for these transfers.
+In Linux, these transfers are done via "block device drivers". When a new Linux system is installed, these drivers that can transfer
+through the fundamental disk units are already embedded into the kernel. But the system programmer can also write their own block
+device drivers. For example, you might need to write a custom block device driver for an SD card circuit in an embedded system.
+
+Actually, the OS uses block device drivers for transfering blocks that doesn't exist in the page cache. The OS uses what's called
+"IO scheduling" for some read/write operations that are related to disks (disks are also called block devices). The IO scheduling
+coordinates multiple processes needing the same disk sectors. In this case, the OS cannot deliver the IO request to the block device
+driver. Instead, the IO scheduler puts the requests in order, merges them if possible and only after these improvements/optimizations
+are made it sends the request to the block device driver.
