@@ -1,0 +1,143 @@
+We can summarize what happens during a file read/write as follows:
+
+1) The program that runs in user space calls read or write POSIX functions (or standard C file functions, which call read/write POSIX
+functions under the hood if the data isn't in their buffer anyway).
+2) read and write POSIX functions call the system functions the name sys_read and sys_write in Linux. Here, the execution gets out of
+the user mode and continues in kernel mode.
+3) sys_read and sys_write functions first check if the read/write disk blocks exists in the OS's disk cache (called the page cache, or
+buffer cache if you wanna use its old name). If it does, the execution doesn't get stopped at all (aka the thread isn't put to sleep).
+However, if it doesn't, Linux sends the request to the IO scheduler.
+4) IO scheduler schedules the requests, allocates the required space in the page cache (there are some details about this process) and
+sends the transfer information to the block device driver.
+5) The actual transfer is done by the block device driver. Block device driver either reads the data from the requested sectors of the
+disk into the page cache or writes to the requested sectors on the disk. The OS sends this information to the block device driver via
+a queue system.
+6) Once the block device driver is done, the sector read is now in the page cache and can be accessed via the sys_read.
+
+In modern Linux systems, the block device drivers that realize the transfers are already embedded into the kernel image. However, even
+though it's rare, the system programmer might need to write new block device drivers.
+
+The write function actually first writes to the OS's page cache instead of directly writing to the disk. Then the write function
+returns to the caller, a separate OS thread starts checking the page cache before writing the data on the disk. This is done in order
+to not block the calling thread during the write operation. Only after the check is the data written to the disk. This is called
+"delayed write" and the delay is typically a few seconds. This behavior can be disabled when opening the file with the O_SYNC
+parameter. Disabling this can be necessary for things like memory mapped IO.
+
+The delayed writing can also help with SSD wear, since SSDs have a limited number of writes they can achieve before the hardware
+starts failing. Writing data in bulk helps SSD's wear leveling system implemented in hardware. However, the primary function of the
+delayed write isn't to handle wear leveling, it just helps wear leveling system achieve its task. Also, it should be noted that if
+there is a power outage or a similar issue before the data is written to the disk from the page cache, the data will be lost.
+
+IO operation in OSs context can be divided into two:
+----------------------------------------------------
+Synchronized: When the function ends, everything about the operation is done.
+Asynchronized: The functions operations keep going in the background for a while even after the function ends.
+
+The write function is async by default, not a sync.
+
+How long does it actually take for the OS to write the data into the disk sector then?
+--------------------------------------------------------------------------------------
+In modern OSs, there is a background kernel thread that deals with this operation. In Linux systems, this is done by the thread named
+"pdflush". This thread constantly monitors the page cache and sends the dirty blocks to the block device driver. How long this process
+actually takes depends on a number of parameters. As mentioned before, a rough estimate we can say this takes a couple of seconds.
+In Linux, once a page becomes dirty, it is allowed to stay in the RAM for a maximum of 30 seconds. After that, it is sent to the block
+device driver to be written to the disk. These values can be modified in various ways, such as using kernel parameters during kernel
+compilation.
+
+These values can be viewed from the proc files "/proc/sys/vm/dirty_writeback_centisecs" and "/proc/sys/vm/dirty_expire_centisecs". A
+centisec is 100th of one second, aka 100 centisecs = 1 second.
+
+This delayed write is also the reason for not removing USB flash drives before saying eject safely. The OS might still be waiting for
+the write operation to be completed. In GUI environments, there is an eject option. This option runs the following two commands to
+ensure the writing is complete.
+
+    sync                  #Synchronizes cached writes to persistent storage
+    umount /dev/sdX       #Unmounts filesystems
+
+Alternatively, these two commands can also be run from the terminal to achieve the same result. Make sure that X in sdX is the actual
+letter of the USB drive.
+
+Pages that become dirty in the page cache can also be transferrred to the disk without waiting for the flusher thread of the OS. For
+example, closing a file will cause the file's dirty pages to be written to the disk. Also, in most UNIX/Linux systems, there are ways
+to alter this behavior through special system functions or by using the O_SYNC flag for the open POSIX function. Examples:
+
+the sync POSIX function (all dirty pages in the file system are flushed when this function is called):
+
+    #include <unistd.h>
+    void sync(void);
+
+the fsync POSIX function (dirty pages of a specific file are flushed when this function is called):
+
+    #include <unistd.h>
+    void fsync(int files);
+
+
+So far we talked about read/write operations in blocks and sectors level. However we didn't talk about the organization the kernel
+uses for open files. Now we talk about this part.
+
+When reading/writing files from C std library, first the underlying POSIX functions are called, then those POSIX functions call the
+system functions inside the kernel. The C IO functions are buffered functions, meaning they try to minimize the number of POSIX calls
+they have to make. For example, when the programmer tries to read a single byte with getc, the function doesn't read a single byte. It
+reads a buffer of BUFSIZ bytes and then returns a single byte from that buffer. This way, if the same block is read again, switching
+to kernel mode by calling POSIX functions won't happen, therefore the operation will be faster. This is also true of other programming
+languages such as C++, C#, Java etc. However, this isn't the same buffer as the kernel's IO buffer. The purpose of this buffer is to
+minimize the POSIX calls, while the purpose of the kernel buffer is to optimize the disk access times.
+
+This course focuses on the POSIX and kernel side of things rather than the std C library implementation. If you are wondering about
+C std lib implementations, you can check "musl" and "uclibc (micro-c)" libraries. Although the GNU Lib C library is the single most
+used C std lib implementation, it is very long and complicated because it handles a lot of different systems and configurations, which
+makes it quite hard to follow. musl and uclibc are simpler and can be followed with more ease. All of these implementations can be
+found at "elixir.bootlin.com" just like the Linux kernel source code. This site isn't reserved for Linux kernel.
+
+In UNIX/Linux systems, a file can be opened via the open POSIX function. Upon success, this function returns a file descriptor handle.
+Other POSIX file functions such as read, write, lseek, close etc. use this handle to determine which file to operate on. Disregarding
+some details, these primary file functions directly call their kernel counterparts:
+
+read --> sys_read
+write -->sys_write
+lseek --> sys_lseek
+close --> sys_close
+
+The details that we disregard are things such as parameter checking etc.
+
+So how does the kernel hold the information about the open files?
+There are two important fields in the task_struct that are used for this purpose:
+
+    struct fs_struct *fs; //Filesystem information
+    struct files_struct *files; //Open file information
+
+These two elements have been in the kernel for a very long time. However how the fs_struct and files_struct implemented has changed
+over time.
+
+The fs_struct isn't related to the organizations about the open files. It is related to the process' fundamental working informations
+such as its root and working directories. In modern kernels, fs_struct is declared as follows:
+
+    struct fs_struct {
+        int users;
+        spinlock_t lock;
+        seqcount_spinlock_t seq;
+        int umask;
+        int in_exec;
+        struct path root, pwd;
+    } __randomize_layout;
+
+The root and pwd fields hold the root and working directory of the process. This struct used to be smaller. For example, in v2.2, this
+struct was implemented as the following:
+
+    struct fs_struct {
+        atomic_t count;
+        int umask;
+        struct dentry *root, *pwd;
+    };
+
+Here, the umask field holds the umask value of the process.
+
+In v0.01, this struct didn't exist. The informations in this struct were held directly inside task_struct.
+
+The most important fields in fs_struct are the root and working directories of the process, along with its umask value.
+
+
+
+
+
+
