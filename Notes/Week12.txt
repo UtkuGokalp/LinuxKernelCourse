@@ -98,7 +98,7 @@ write -->sys_write
 lseek --> sys_lseek
 close --> sys_close
 
-The details that we disregard are things such as parameter checking etc.
+The details that we disregard are things such as parameter checking, setting the errno etc.
 
 So how does the kernel hold the information about the open files?
 There are two important fields in the task_struct that are used for this purpose:
@@ -135,6 +135,103 @@ Here, the umask field holds the umask value of the process.
 In v0.01, this struct didn't exist. The informations in this struct were held directly inside task_struct.
 
 The most important fields in fs_struct are the root and working directories of the process, along with its umask value.
+
+The files pointer in the task_struct points to the memory address that holds information about the files that process has open. In
+modern kernels, this struct can be found in "include/linux/fdtable.h".
+
+In Linux systems, when the open POSIX function is called, the underlying sys_open call allocates a struct file instance for the file
+and uses this instance to hold the file's information. Other POSIX file functions such as read, write, lseek, close (calling their
+sys_ counterparts under the hood) need to use this struct file instance and data contained within in order to be able to operate on
+the file. In OSs context, objects used for such purpose are called the "file object" and we will use this term in the course as well.
+As mentioned before, kernel and system functions access the file object through the task_struct. file_struct holds the information
+about how to access the file as well for these systems.
+
+Let's assume we opened a file with the following line:
+
+    fd = open(...);
+
+When this is called, sys_open system function finds the location of this file on the disk along with its metadata values. Using those,
+it creates a file object. Then puts the address of that file object into task_struct. Once this is done, sys_read, sys_write,
+sys_lseek and sys_close can reach the file through the task_struct.
+
+So how are the file descriptor and objects created and stored?
+--------------------------------------------------------------
+In modern kernels, this data structure is rather detailed so let's first examine v0.01 for simplicity's sake.
+In v0.01, open file informations were held directly in the task_struct. files_struct and fs_struct pointers didn't exist.
+
+    struct task_struct {
+        unsigned long close_on_exec;
+        struct file *filp[NR_OPEN];
+    };
+
+NR_OPEN is defined as follows:
+
+#define NR_OPEN 20
+
+The filp field holds the files a process can open. In v0.01, a single process could only hold up to 20 files open at once. This limit
+is 1024 in modern Linux kernels. 1024 is the soft limit that can be increased, but there is also a hard limit and unless the user is
+root, the hard limit cannot be passed. Increasing this value can be done via the "setrlimit" function.
+
+In UNIX/Linux systems, the arrays that hold the file object addresses are called the "file descriptor table". filp field here acts as
+a basic file descriptor table. Each entry in the file descriptor table points to a file object that is associated with the process.
+Notice that the files can get closed during the lifetime of the process. This will cause parts of the descriptor table to be emptied.
+This can be done by setting them to NULL. The following FDT is a valid FDT.
+
+FDT
+--------------------------
+0 --> File Object (stdin)
+1 --> File Object (stdout)
+2 --> File Object (stderr)
+3 --> EMPTY
+...
+18 -->File Object
+19 -->EMPTY
+
+In Linux, by convention, 0th file object is reserved for stdin, 1st file object is reserved for stdout and the 2nd file object is
+reserved for stderr. So when a process opens up a new file, the very first newly opened file will be at the 3rd index.
+
+When a file descriptor is obtained the open POSIX function, that descriptor represents an index into the FDT. The lowest available
+index being returned as the file descriptor is guaranteed by the POSIX standards.
+
+Note that file descriptors are process specific and doesn't mean anything system-wide. The same descriptor can describe two different
+files for two different processes (because it is just an index into an array). However, there is an exception: forking. When a process
+is forked, its FDT is shallow copied into its child so that the child can also access the same files with the same descriptors.
+
+The close_on_exec flag in the task_struct is a bitmask that determines whether or not the descriptor needs to be closed upon exec
+operations. If the nth bit is 1, the nth file descriptor needs to be closed when an exec operation is to be performed. If 0, no close
+operation shall occur. POSIX standards say that by default, the close_on_exec flag should be set to 0 (what is an exec operation I
+have no idea).
+
+sys_open first checks for the first available file descriptor. If there are none, there is no need to keep going. So how is a free
+file descriptor found? In v0.01, since there are only 20 file descriptors, it is as simple as a linear for loop to check if there is a
+free file descriptor. However, as mentioned before, in modern kernels, there are 1024 file descriptors. A linear for loop in an array
+this big introduces considerable overhead. In order to fix this, there were hardware instructions put into CPUs. This instruction gets
+a value and returns its first 0 bit. The value that can be checked is of 64 bit length. 1024 / 64 = 16. Meaning the kernel needs to
+only loop over 16 batches at maximum. Then, using the hardware instruction, it checks the first available bit (first 0 bit) and
+returns that as the first available file descriptor. In x86_64 CPUs, this instruction is called BSF (bit scan forward) and BSR (bit
+scan reverse). To this day, the kernel handles this operation using this machine instruction.
+
+However there is one detail: BSR and BSF instructions actually check the first bit that is 1, not 0. In order to check for 0, the mask
+is first inverted (NOT operation) and then BSR/BSF instructions are used.
+
+Creating data structures (such as radix trees) to handle this behaviour is both harder to do and is more costly since there is a cost
+to creating the data structure itself to begin with as well. The easiest and fastest way really is using hardware instructions.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
