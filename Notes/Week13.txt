@@ -1,0 +1,162 @@
+In v2.6, there were a new struct called struct fdtable introduced into files_struct:
+
+    struct files_struct {
+        atomic_t count;
+        struct fdtable __rcu *fdt;
+        struct fdtable fdtab;
+
+        spinlock_t file_lock __cacheline_aligned_in_smp;
+        int next_fd;
+        struct embedded_fd_set close_on_exec_init;
+        struct embedded_fd_set open_fds_init;
+        struct file __rcu *fd_array[NR_OPEN_DEFAULT];
+    };
+
+    struct fdtable {
+        unsigned int max_fds;
+        struct file __rcu **fd; //current fd array
+        fd_set *close_on_exec;
+        fd_set *open_fds;
+        struct rcu_head rcu;
+        struct fdtable *next;
+    };
+
+struct fdtable was used to tidy up the structure a bit more. With this version, these structs were also carried into a new file, which
+is "include/linux/fdtable.h".
+
+The way pointers point to each other are as follows:
+
+files_struct has the pointer fdt -> it points to fdtab -> fdtab contains fd pointer -> fd array has file descriptor informations
+
+The kernel always starts from fdt pointer. At the beginning, fdt pointer points to the fdtab struct instance. In fdtab instance, as it
+was in the older versions, fd, close_on_exec, open_fds pointers exist. These pointers, at the beginning, point to their counterparts
+(fd_array, close_on_exec_init and open_fds_init respectively) in files_struct. However, as things progress, fdt pointer inside
+files_struct can point to another fdtable instance, and pointers inside the fdtable can also point to other, bigger instances.
+
+So how do we access a file that is pointed by the file descriptor using current macro?
+current->fdt->fd[fdx]
+
+There were also macros and functions introduced to simplify this access. These functions also make some sanity checks:
+
+    static inline struct file * fcheck_files(struct files_struct *files, unsigned int fd);
+    #define fcheck(fd) fcheck_files(current->files, fd)
+
+There is also a higher level function called fget that directly gets the file from the file descriptor in v2.6:
+
+    struct file * fget(unsigned int fd)
+    {
+        return __fget(fd, FMODE_PATH);
+    }
+    EXPORT_SYMBOL(fget);
+
+fget also does some synchronization things in case of there being other updaters. It traverses through the pointer structure mentioned
+above while doing the synchronization and other necessary checks and returns the file from the file descriptor table. fget is also
+exported, meaning it is a function that can be used by drivers as well.
+
+In modern kernels (v6), fd_set isn't used anymore. The bit arrays are directly created by a long array instead of fd_set.
+current->files->fdt->fd[fdx] can also be used in these versions. Doing this access in a safe way are also implemented via kernel
+functions. fget function is still available and can be used the same way.
+
+As mentioned in the previous weeks, the main problem is finding the very first bit that is zero in order to find the first available
+file descriptor. In modern kernels, this is done by using two level bitmaps. full_fds_bits represents the first level bitma and
+opend_fds represents the second level bitmap. Whether or not all file descriptors are full or not is represented in open_fds.
+full_fds_bits bitmap then represents the index of the first element in the open_fds where not all bits of the long data is 0. So how
+is this actually done in modern kernels?
+
+There is a function called find_next_zero_bit in the kernel that has been in use for a long time now. As mentioned before, internally
+it uses CPU specific assembly instructions under the hood. These instructions are written with gcc compiler extensions that allow 
+writing assembly instructions in C code.
+
+The traversal of functions after calling sys_open is as follows:
+sys_open --> do_sys_open --> do_sys_openat2 --> __get_unused_fd_flags --> alloc_fd --> find_next_fd --> find_next_zero_bit
+
+The implementation of find_next_fd in modern kernels is as follows (please note that the first and second level mentioned in the
+kernel comments is the reverse of the level that is mentioned in the course notes. meaning, the course notes say the first used level
+is the first and then the second level gets used. In kernel comments and codes however, the first used level is the second level and
+the secondly used level is the first level. In kernel codes, the first level bitmap represents whether the file descriptors are full
+or not, and the second level bitmap represents the index of the first zero bit element in the first level. Kernel's first level is
+open_fds and kernel's second level is full_fds_bits):
+
+    static unsigned int find_next_fd(struct fdtable *fdt, unsigned int start)
+    {
+        unsigned int maxfd = fdt->max_fds; //always multiple of BITS_PER_LONG
+        unsigned int maxbit = maxfd / BITS_PER_LONG;
+        unsigned int bitbit = start / BITS_PER_LONG;
+        unsigned int bit;
+
+        //Try to avoid looking at the second level bitmap
+        bit = find_next_zero_bit(&fdt->open_fds[bitbit], BITS_PER_LONG, start & (BITS_PER_LONG - 1));
+
+        if (bit < BITS_PER_LONG)
+            return bit + bitbit * BITS_PER_LONG;
+
+        bitbit = find_next_zero_bit(fdt->full_fds_bits, maxbit, bitbit) * BITS_PER_LONG;
+        if (bitbit >= maxfd)
+            return maxfd;
+        if (bitbit > start)
+            start = bitbit;
+        return find_next_zero_bit(fdt->open_fds, maxfd, start);
+    }
+
+The first parameter of the function takes the address of the fdtable instance, second parameter typically takes the next_fds, which
+represents the descriptor number that the search will start from.
+
+As a summary:
+1) The kernel doesn't immediately go to second level bitmap (full_fds_bits). It first searches on a single unsigned long element of
+the open_fds array.
+2) If the search is unsuccessful, the index of the first 0 bit in the second level bitmap is obtained. In the first level (open_fds),
+only the unsigned long element in this index is searched.
+3) find_next_zero_bit function uses small_const_nbits function internally to decide whether the search will include only a single
+element of the unsigned long array or all the elements after that element.
+
+Following the codes further will show that the search is done by ffz and __ffs instructions at the assembly level.
+
+So far, we talked about:
+-Data structures in the task_struct about the open files
+-How empty descriptors are stored
+-How the lowest empty descriptor is obtained
+
+Now, we move on to the data structures of the file systems and talk about how the kernel handles the file operations.
+
+In POSIX systems (and therefore in Linux), threads doesn't have separate file descriptor tables. File descriptors and file descriptor
+tables are process specific. So when a process creates a thread, the file information is specific to the process and its the threads
+can access this file information. When copying the data into the newly created thread, a shallow copy operation is done (aka only the
+pointers are copied, not the underlying data). This is one of the most important reasons why so many pointers are used in the
+implementation of the structs mentioned above and in the previous week.
+
+This means that in the end, there is only a single files_struct instance per process.
+
+When fork() is called, child process can also see the same open files with the parent process. How is this implemented in modern
+kernels?
+
+Let the open file's file descriptor be 3. When the process forks, a completely identical process will be created. After fork the child
+process will be also able to use the file descriptor 3. Parent process' file descriptor with ID 3 points to the same file instance as
+the child process' file descriptor with ID 3. However, for the files that are opened AFTER the fork operation, they must be different.
+So, a new file struct instance is created. A new file descriptor table is created. That part is done with deep copying. But the
+intialization of the deep copied table is done using the parent's file descriptor table. Basically, their past is the same but their
+future needs to be different and the setup is done accordingly.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
