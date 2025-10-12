@@ -136,27 +136,113 @@ So, a new file struct instance is created. A new file descriptor table is create
 intialization of the deep copied table is done using the parent's file descriptor table. Basically, their past is the same but their
 future needs to be different and the setup is done accordingly.
 
+Now let's move on to the kernel's data structures and fundamental file operation functions.
+The kernel holds the information about the open files in a struct called "struct file". Some of the elements of this struct can be
+enabled/disabled with kernel compilation options. Here are some important members of this struct:
 
+-File pointer's position in the member "loff_t f_pos"
+-Various flags about the file is stored in the member "unsigned int f_flags" (such as O_APPEND or O_RDWR used when opening the file,
+file's rwx access rights on the disc, type of the file etc.)
+-User and group ID informations of the file in "unsigned int f_uid, f_gid"
+-File's directory information in "struct dentry *f_dentry" (dentry stands for directory entry). Later moved into struct path structure
+-The mode of the file when opened with the open function in "mode_t f_mode".
+-How many file descriptors point to the file in "atomic_t f_count"
+-File's disc information in struct inode *f_inode
 
+Note: Some of these members can be a bit different in terms of types and locations. The tutor showed us these from different versions
+of the kernel and since I can't copy-paste the way he did I tried my best to note them as well as I can. Some version might've gotten
+mixed up.
 
+There can be multiple references to a given file, which is held in the f_count variable as mentioned before. As the file is closed by
+these references, the f_count is decreased and once it reaches zero, the file object is deleted.
 
+So how does the kernel access the file on the disc while working on an open file? There are required metadata about the files that are
+stored on the disc (such as last read time, last modified time, file length etc.). In ext file systems, these informations are held
+in a place called the "i-node block". When the file is being opened, the kernel reads these informations from the disc and puts them
+in a struct called "struct inode". This way, the kernel doesn't have to go to the disc every single time it needs an information that
+is stored in there.
 
+So what about the directory information of the file? When a new file is opened, the kernel reads its directory data (such as file 
+path and some other information) into another struct called "struct dentry".
 
+To summarize:
+-struct file: Struct used to make operation on open files
+-struct inode: Struct used to hold meta data information about the file on the disk
+-struct dentry: Struct used to hold the location of the file in the file system and some other related information
 
+So how can we reach the inode and dentry structs? Up until and including v2.6, the address of the dentry struct was held under the
+file struct. dentry struct then held the address of the inode struct. So the chain was as shown below:
 
+file struct --> dentry struct --> inode struct
 
+Later down the line, inode struct's address was also put into file struct for ease of access. Obviously, inode can still be accessed
+from the dentry struct. Otherwise it would be a catastrophy for backwards compatibility.
 
+In UNIX/Linux systems, a file system can be mounted somewhere in the root directory. Meaning, different file paths that can be
+accessed from the same file system can exist in different physical devices. This also creates the situation where the kernel needs to
+be able to understand what file system a mounted path is in (think using ext4 on Linux but then mounting Windows's NTFS that exist on
+the other SSD in the PC). The information required to achieve this will be called the mount information in the course. Before v2.4,
+the mount information was held in struct dentry. Starting with v2.4, "struct vfsmount" was introduced and put into struct file for
+better organization. After v2.6, an open file's struct dentry address and vfsmount information was put into yet another struct called
+"struct path", which is stored in struct file as the element f_path.
 
+Imagine the case where the same file was opened multiple times via the "open" function.
 
+    fd1 = open("test.txt", O_RDONLY);
+    fd2 = open("test.txt", O_RDONLY);
 
+When this is done, independent of whether or not the file is the same file, the kernel creates a new struct file instance for each
+open call. Because each time we open up a file, their file descriptors will be different. File descriptors are stored struct file in
+instances. However, since this is the same file on the disk, there is no need to create new struct inode and struct dentry instances.
+Moreover, different processes can also be accessing the same file on the disk; for which there is still no need to create new struct
+inode and struct dentry instances. Therefore the kernel doesn't create new instances for these structs when the same file is opened
+multiple times.
 
+This also means that when a new file is opened, the kernel needs to check if this file already has inode and dentry structs instances.
+For this, the kernel uses the cache mentioned above. There are two different caches; "dentry cache" and "inode cache". When a new file
+is opened, if the correesponding dentry and inode instances exist in these caches, they are directly used without getting the disc
+involved at all. Even when all the processes close an open file, the dentry and inode information stick around in this cache. This is
+because some files are frequently opened and closed, such as library files, or /etc/passwd file. Having them in the cache instead of
+going to the disc each time they are needed improves performance quite a lot. Of course, these cache systems have a size limit. When
+they are full, some of the dentry and inode instances are released from the cache. In Linux, these cache systems are generally use an
+algorithm called LRU (Least Recently Used). Meaning when instances from the cache need to be released, the released ones aren't the
+ones that are used the least overall, but only the ones that haven't been used in a while. This is because if instances really need
+to be kept around, it will mostly likely be constantly and frequently in use.
 
+Now let's talk about the relationship between dentry cache, inode cache and page cache.
+Page cache is organized based on disc blocks. It is used to transfer every type of disc block and is a low level cache.
+Dentry and inode caches on the other hand, are caches that only handle dentry and inode struct instances respectively. When a new file
+is opened, if the dentry and inode instances doesn't exist in the cache, they are obtained from the disc. Before the disc reading is
+done, page cache is checked to see if the required blocks exist in the page cache.
 
+To summarize, what happens once a file is opened is as follows:
+1) An empty file descriptor from the process' file descriptor table is found quickly.
+2) A struct file instance is created and initialized.
+3) dentry and inode struct instances are created if they don't already exist in their respective caches.
+4) The address of the struct file instance is put into the file descriptor table (fd array) and the index at which it is placed is
+returned as the file descriptor.
 
+This is what we have done so far. However, there are also other things that need to happen. One of these things are called the
+"pathname resolution".
 
+The root directory and the current working directory of a given process is held in the process control block (task_struct instance) as
+talked about in the first few weeks. In modern kernels, this information is held as follows:
 
+    struct task_struct {
+        //other members...
+        struct fs_struct *fs;
+        //other members...
+    };
 
+    struct fs_struct {
+        //other members...
+        struct path root, pwd;
+        //other members...
+    } __randomize_layout;;
 
+    struct path {
+        struct vfsmount *mnt;
+        struct dentry *dentry;
+    } __randomize_layout;
 
-
-
+As it can be seen, the kernel holds the root and working directories of a given process as dentry structs.
