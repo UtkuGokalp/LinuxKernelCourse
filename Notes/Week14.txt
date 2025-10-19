@@ -1,0 +1,76 @@
+The first day of this week was cancelled due to an issue with the instructor's ISP. So there are no notes for the first day.
+
+During kernel/driver development, sometimes ref count needs to be increased as we are using some things. One example is file
+operations. The idea is similar to C++'s typical shared_ptr<T> implementation. I don't know if there are automated ways of doing that,
+such as macros or functions (there probably are).
+
+Currently there are some tests being made in the course about file system's foundational data structures. However, there are a ton of
+code for that and there is no way I can write all of those while also listening to the course. Therefore the notes for those will not
+be here. They can be found in the course notes of the instructor.
+
+Accessing the file object through the file descriptor via current->files->fdt->fd[fd] is not safe. This is because in case while this
+accessing is going on, the file descriptor table can be enlarged or there might be an operation being made on the file descriptor
+(although this would require for us to do operation, not the kernel by itself since file descriptor table is process specific). In
+order to prevent this, we need to use the sync mechanisms provided and used by the kernel. This mechanism is the RCU mechanism, which
+was semi-covered in previous weeks. It will be covered in more detail later on in the course.
+
+Another important point is the reference count of objects (in this context, file objects). There might be multiple codes using the
+same file. The kernel needs to know when to free the file object, and doing so while a process is still using it would lead to
+undefined behavior. In order to avoid this, a reference count system is in place in the kernel. So when we start using a file object,
+we need to increase the reference count and then decrease it back again when we are done with the file object.
+
+The functions in the kernel that automatically increase the ref count is suffixed with "get", and the ones the decrease the ref count
+are suffixed with "put". This brings us to the safe way of doing current->files->fdt->fd[fd], which is the "fget" function. This
+function increases the ref count, uses the RCU mechanism internally for correct syncing and then returns the file object. When we are
+done, we can use the "fput" function to decrease the ref count. These functions are exported and can also be used by device drivers.
+
+    struct file *fget(unsigned int fd);
+    void fput(struct file *);
+
+These function prototypes are in "include/linux/file.h". Their implementations are in different places in across different versions.
+
+In modern kernels, in order to achieve fget and fput, fdget and fdput functions were also added:
+
+    static struct fd fdget(unsigned int fd);
+    static void fdput(struct fd fd);
+
+The fd struct is also different across the latest kernels and the one we are using in the course. The course uses v6.9.2. This version
+has the struct fd as the following:
+
+    struct fd {
+        struct file *file;
+        unsigned int flags;
+    };
+
+However, the latest kernels has this struct as the following:
+
+    struct fd {
+        unsigned long word;
+    };
+
+Also, in order to access the file object, the latest kernels also require fd_file function to be used alongisde the fdget function.
+v6.9.2 doesn't have such a requirement.
+
+Although the latest kernels has fdget and fdput working faster, fget and fput can still be preferred due to their simple interface and
+the fact they have been used for a long time at this point.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
