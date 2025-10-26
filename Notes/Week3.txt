@@ -116,7 +116,7 @@ This can be used to get the files of the current kernel. Ex:
 echo $(uname -r)-config => Gets the config file name as it is named in ubuntu based machines
 
 nproc: Gets the number of processors in the computer. This can be used as: make -j$(nproc) for multi-threaded compilation.
-c
+
 some of the make targets:
 -------------------------
 1) make defconfig: gets the default config file from the arch directory and puts it into the root directory. This command gets the
