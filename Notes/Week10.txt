@@ -107,7 +107,7 @@ pid_task finds the task_struct instance's address by using the linked list chain
 hlist_node link is inside the uid struct, and the uid struct is in the pid struct. (A lot of things were covered about this but I
 zoned out hard and can't catch up with all of that now)
 
-21.09.2025 somewhere after 11.00
+21.09.2025 somewhere after 11.00 AM
 
 
 

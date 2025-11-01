@@ -1,0 +1,296 @@
+When resolving filepaths, each component is first searched in the dentry cache. If it is in there, that instance is directly used.
+Otherwise, the dentry instance is created by doing a disc read, after which the new instance is added to the dentry cache. For example,
+if we have the following path:
+
+"/home/user/study/sample.c"
+
+Here, if we have the "home" component of the path exists in dentry cache, that is used. Similarly, if the "user" directory exists in
+the dentry cache, that instance is used. But, if the "study" directory doesn't exist in the dentry cache, this path component will
+require a disc read operation, after which it will be added to the dentry cache. This way, commonly used path components will 
+accumulate in the dentry cache, which will accelerate resolving the paths.
+
+The dentry cache system were added to Linux kernel with the v2 versions. Before these versions, each time a path needed to be resolved,
+a disc read was performed (along with checking the page cache).
+
+Now let's move on to how the dentry cache works. The dentry cache consists of dentry objects. These dentry objects are represented in
+the kernel with the dentry struct. The dentry struct in modern kernels is defined in "include/linux/dcache.h" as follows:
+
+	struct dentry {
+		/* RCU lookup touched fields */
+		unsigned int d_flags;		/* protected by d_lock */
+		seqcount_spinlock_t d_seq;	/* per dentry seqlock */
+		struct hlist_bl_node d_hash;	/* lookup hash list */
+		struct dentry *d_parent;	/* parent directory */
+		struct qstr d_name;
+		struct inode *d_inode;		/* Where the name belongs to - NULL is
+						 * negative */
+		unsigned char d_iname[DNAME_INLINE_LEN];	/* small names */
+
+		/* Ref lookup also touches following */
+		struct lockref d_lockref;	/* per-dentry lock and refcount */
+		const struct dentry_operations *d_op;
+		struct super_block *d_sb;	/* The root of the dentry tree */
+		unsigned long d_time;		/* used by d_revalidate */
+		void *d_fsdata;			/* fs-specific data */
+
+		union {
+			struct list_head d_lru;		/* LRU list */
+			wait_queue_head_t *d_wait;	/* in-lookup ones only */
+		};
+		struct hlist_node d_sib;	/* child of parent list */
+		struct hlist_head d_children;	/* our children */
+		/*
+		 * d_alias and d_rcu can share memory
+		 */
+		union {
+			struct hlist_node d_alias;	/* inode alias list */
+			struct hlist_bl_node d_in_lookup_hash;	/* only for in-lookup ones */
+		 	struct rcu_head d_rcu;
+		} d_u;
+	};
+
+In v0.01, this struct used to be defined as the following:
+
+	struct dir_entry {
+		unsigned short inode;
+		char name[NAME_LEN];
+	};
+
+In v2.2 and v2.4, it became the following:
+
+	struct dentry {
+		int d_count;
+		unsigned int d_flags;
+		struct inode  * d_inode;	/* Where the name belongs to - NULL is negative */
+		struct dentry * d_parent;	/* parent directory */
+		struct dentry * d_mounts;	/* mount information */
+		struct dentry * d_covers;
+		struct list_head d_hash;	/* lookup hash list */
+		struct list_head d_lru;		/* d_count = 0 LRU list */
+		struct list_head d_child;	/* child of parent list */
+		struct list_head d_subdirs;	/* our children */
+		struct list_head d_alias;	/* inode alias list */
+		struct qstr d_name;
+		unsigned long d_time;		/* used by d_revalidate */
+		struct dentry_operations  *d_op;
+		struct super_block * d_sb;	/* The root of the dentry tree */
+		unsigned long d_reftime;	/* last time referenced */
+		void * d_fsdata;		/* fs-specific data */
+		unsigned char d_iname[DNAME_INLINE_LEN]; /* small names */
+	};
+In v2.6, it then became:
+
+	struct dentry {
+		/* RCU lookup touched fields */
+		unsigned int d_flags;		/* protected by d_lock */
+		seqcount_t d_seq;		/* per dentry seqlock */
+		struct hlist_bl_node d_hash;	/* lookup hash list */
+		struct dentry *d_parent;	/* parent directory */
+		struct qstr d_name;
+		struct inode *d_inode;		/* Where the name belongs to - NULL is
+						 * negative */
+		unsigned char d_iname[DNAME_INLINE_LEN];	/* small names */
+
+		/* Ref lookup also touches following */
+		unsigned int d_count;		/* protected by d_lock */
+		spinlock_t d_lock;		/* per dentry lock */
+		const struct dentry_operations *d_op;
+		struct super_block *d_sb;	/* The root of the dentry tree */
+		unsigned long d_time;		/* used by d_revalidate */
+		void *d_fsdata;			/* fs-specific data */
+
+		struct list_head d_lru;		/* LRU list */
+		/*
+		 * d_child and d_rcu can share memory
+		 */
+		union {
+			struct list_head d_child;	/* child of parent list */
+		 	struct rcu_head d_rcu;
+		} d_u;
+		struct list_head d_subdirs;	/* our children */
+		struct list_head d_alias;	/* inode alias list */
+	};
+
+Here are the most important members of the dentry struct:
+
+	struct dentry {
+		struct dentry *d_parent;			//The parent directory's dentry instance
+		struct super_block *d_sb;			//The instance that shows which disk block this dentry belongs to
+		struct qstr d_name;					//Name of the dentry
+		union shortname_store d_shortname;	//Short name of the dentry
+		struct inode *d_inode;				//dentry's inode instance
+		struct hlist_node d_sib;			//subdirectories of the parent
+		struct hlist_head d_children;		//subdirectories of this directory
+		struct hlist_bl_node d_hash;		//lookup hash list
+	};
+
+"d_name" element holds the name of the dentry. In modern kernels, it is declared as the following:
+
+	struct qstr {
+		union {
+			struct {
+				HASH_LEN_DECLARE;
+			};
+			u64 hash_len;
+		};
+		const unsigned char *name;
+	};
+
+Note that the union here is an anonymous union, which was added to C starting with C11. Anonymous unions need to be in another union or
+struct.
+Also note that hash_len here doesn't mean the length of the hash, but instead it means that the 64 bit value is a combination of the
+hash and the len variables (via bitwise or, which the compiler takes care of). This is done so that in places where we want to compare
+both the hash and the length, we can simply compare hash_len and omit a second comparison. One example of doing this is as follows:
+Assume we want to compare two file names: "one.c" and "two.c". Both of these file names have the same length. So once the file name is
+compared, before doing the character by character string comparison, we can also check the hash for the files and see whether they
+match or not. Meaning, instead of
+
+	if (hash1 == hash2 && len1 == len2)
+
+we can just do
+
+	if (hash_len1 == hash_len2)
+
+and it will work the same way.
+
+In v2.2, v2.4, v2.6 kernels, it was declared as the following:
+
+	struct qstr {
+		unsigned int hash;
+		unsigned int len;
+		const unsigned char *name;
+	};
+
+Notice that the length of the qstr is also held in the structure. This is because the const unsigned char* for the name in the qstr is
+not null terminated. This is because for some file systems don't support null terminated strings. Also, in order to avoid checking if
+two strings are the same, first their length are checked and if they are different, they are immediately deemed not equal. This is done
+because comparing two directory names are done very frequently.
+
+In modern kernels, dentry cache system became rather complicated, which caused qstr struct to become more complicated as well. In this
+struct, both the name and the byte-length of the dentry is held, along with the hash value of the dentry's name. The hash value is the
+hash of only the name of the dentry. The hash for the whole dentry instance also exists, but its creation depends on the parent dentry
+instance as well. This will be examined later on.
+
+The memory where the name of the dentry will be stroed in is allocated from the kernel heap. However, in order to be faster for doing
+this, short dentry names are directly held in an array that is stack allocated in the dentry struct. In modern kernels, d_shortname
+element of the dentry struct holds this array:
+
+	union shortname_store {
+		unsigned char string[DNAME_INLINE_LEN];
+		unsigned long words[DNAME_INLINE_WORDS];
+	};
+
+#ifdef CONFIG_64BIT
+   #define DNAME_INLINE_WORDS 5
+#else
+ #ifdef CONFIG_SMP
+   #define DNAME_INLINE_WORDS 9
+ #else
+   #define DNAME_INLINE_WORDS 11
+ #endif
+#endif
+
+#define DNAME_INLINE_LEN (DNAME_INLINE_WORDS*sizeof(long))
+
+In today's 64 bit Linux systems, this array is 40 bytes long, and in 32 bytes systems it is 36 bytes or 44 bytes long. Some kernel
+versions has comments next to these defines that display different bytes, they are old comments that never got updated and are not true
+in newer kernel versions.
+The kernel first uses these stack allocated arrays for the name of a dentry, and the d_name element also points to that directory. If
+the name becomes so long that it cannot fit into the array, the heap allocation is done, the name is written to the new memory and the
+name member is updated so that it will point to the newly created and initialized memory.
+
+Moving on to d_parent, it holds the dentry instance of its parent directory. Note that because of how the path resolution system works,
+the parent directory's dentry instance should exist in the dentry cache. This way, the kernel can directly find the parent dentry
+instance in the dentry cache when needed. There are some exceptions to this because the parent might've freed from the dentry cache at
+a previous point due to lack of use, but in general this is the case. Just remember that although this is the behavior in general, it's
+not guaranteed.
+
+A similar situation goes for the d_sib and d_children elements of the structure. d_sib element is the root node to the linked list that
+holds the other dentry instances in the same directory. d_children element holds the root note for the child dentry instances. Although
+hlist_node is used here instead of list_head, the underlying data structure has nothing to do with hash tables. Linked lists are used.
+When the kernel wants to traverse through the subdirectories of a directory, it uses the d_children element to do so.
+
+The inode instances that belong to a dentry is held in the d_inode element of the struct. Note that dentry is only used in name-related
+computations (such as path resolution). When doing file operations, the inode structure/instance needs to be used.
+
+As with many kernel objects, dentry instances also have a reference count. In older kernels, this was held as int or unsigned int with
+the name d_lock.
+In modern kernels, this is held as type lockref, with the name d_lockref. When this reference count is to be updated, the spinlock_t
+element in the lockref struct is used:
+
+	struct lockref {
+		union {
+	#if USE_CMPXCHG_LOCKREF
+			aligned_u64 lock_count;
+	#endif
+			struct {
+				spinlock_t lock;
+				int count;
+			};
+		};
+	};
+
+Since in older kernels the RCU mechanism wasn't used as heavily as current kernels, they only used the d_lock instance inside dentry.
+
+Each dentry instance exists in a file system. Remember that in UNIX/Linux systems, there is only a single directory tree. Different
+file systems are mounted to the same file system. Two different directories can have different file systems or they can be in different
+discs. Which file system or disc a directory has is held in the "struct super_block *d_sb" member of the dentry instance. super_block
+struct will be examined in more detail later on. It is a struct that holds the information about the file system. In each mount
+operation, a super_block instance is created - if not already done so.
+
+Now let's talk about the dentry cache system. This is also called the "dcache". The dcache is created as a hash table. This hash table
+is held in "fs/dcache.h" file, using the dentry_hashtable global variable (in modern kernels):
+
+	static struct hlist_bl_head *dentry_hashtable __ro_after_init __used;
+
+__ro_after_init __used attributes are gcc-specific attributes. In v2.2 and v2.4, the declaration is as follows:
+
+	static struct list_head *dentry_hashtable;
+
+In v2.6:
+
+	static struct dcache_hash_bucket *dentry_hashtable __read_mostly;
+
+hlist_bl_head is a struct that points to the linked list chains of the hash table. It is declared as the following:
+
+	struct hlist_bl_head {
+		struct hlist_bl_node *first;
+	};
+
+As it can be seen, hlist_bl_head only holds an address of type hlist_bl_node. hlist_bl_node is declared as follows:
+
+	struct hlist_bl_node {
+		struct hlist_bl_node *next, *pprev;
+	};
+
+In modern kernels, the hash table's linked list chains point to the dentry struct's d_in_lookup_hash elements. In other words, the
+chains of the hash table connect the d_in_lookup_hash elements in the dentry struct to each other.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
