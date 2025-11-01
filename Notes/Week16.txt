@@ -265,32 +265,3 @@ As it can be seen, hlist_bl_head only holds an address of type hlist_bl_node. hl
 
 In modern kernels, the hash table's linked list chains point to the dentry struct's d_in_lookup_hash elements. In other words, the
 chains of the hash table connect the d_in_lookup_hash elements in the dentry struct to each other.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
