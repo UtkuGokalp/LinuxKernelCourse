@@ -265,3 +265,190 @@ As it can be seen, hlist_bl_head only holds an address of type hlist_bl_node. hl
 
 In modern kernels, the hash table's linked list chains point to the dentry struct's d_in_lookup_hash elements. In other words, the
 chains of the hash table connect the d_in_lookup_hash elements in the dentry struct to each other.
+
+So what is the bl in hlist_bl_node and hlist_bl_head? The bl stands for "bit lock". This is because LSB of the pointer named "first" in
+hlist_bl_head struct is used for the spinlock lock in dentry hash table.
+
+When a hash is being created for the dentry hash table, both the dentry's name and the address of its parent directory's dentry
+instance are used. The same two are also used when creating a key for searching in the has table and when searching through a chain of
+the hash table (in case of collision).
+
+Let's assume the dentry instance for the directory "study" is being searched in the hash table and the path is "/home/user/study". At
+the point of searching for "study", we must've already found the dentry instance for the directory "user". So the address of the dentry
+instance for the directory "user" and the name "study" can be used to create a hash, which can then be used as an index into the hash
+table for searching. While performing this search, we need to check if the name of the dentry and the address of the parent directory's
+dentry instance's names are the same. As mentioned above, the names aren't immediately compared with each other. First their lengths,
+then their hashes are compared. If they  are the same, only then their names are checked to see if they're matching.
+
+As it can be seen from the description above, an entry in hash table named "study" isn't what's being searched. What's being searched
+is an entry named "study" that has a parent directory with the required dentry instance.
+
+There can be many entries named "study" with the parent directory named "user". That's why we don't use the name of the parent
+directory but instead the address of its dentry instance. Although the names can be the same, there's a unique dentry instance for each
+directory.
+
+Let's examine resolving a given path using the open command:
+
+    fd = open("/home/user/Study/LinuxKernel/sample.c", O_RDONLY);
+
+The kernel first checks if the path is relative or absolute. This is then used to obtain the dentry instance from the task_struct of
+the process that supplied the path (remember that the task_struct for a given process holds the root and working directories of the
+dentry instances). The path in this example is absolute. This way, the kernel uses "address of the dentry instance of the proces root
+directory" and "home directory" dentry instances' name to calculate the hash and searches for the "home" path in the hash table. If the
+hash can be found in the hash table, the process goes on. Otherwise, the kernel has to go to the disc and fetch the necessary data. We
+assume the dentry for "home" is in the hash table for this example. Now, the kernel will search for the "user" dentry name in the hash
+table using the address of the dentry instance for "home". The operation will keep on going like this in a loop.
+
+So how long is the hash table? How long the dentry hash table will be (meaning how many indices it will have) is determined at boot
+time by checking how much physical RAM the system has. Allocation of the hash table is done at this point via the function
+alloc_large_system_hash (in modern kernels) that can be found in "mm/mm_init.c". This allocation function is called in "fs/dcache.c"
+like so:
+
+    dentry_hashtable = alloc_large_system_hash("Dentry cache", sizeof(struct hlist_bl_head), dhash_entries, 13, HASH_EARLY | HASH_ZERO,
+                                               &d_hash_shift, NULL, 0, 0);
+    d_hash_shift = 32 - d_hash_shift;
+
+As you can see, after this call a d_hash_shift value is obtained, which is then subtracted from 32. As a result, the length of the hash
+table is held via this variable by "the amount of left shifting". Actually, the length of these tables can generally be configured via
+kernel parameters. The shift value used here can be changed via the kernel parameter called "dhash_entries" at the boot process. For
+example, if the kernel is booted via "dhash_entries=262144", the shift value will be 18 - because log(262144, 2) = 18. d_hash_shift
+variable is declared in the "fs/dcache.c" and isn't exported, meaning it cannot be used by drivers.
+
+The kernel logs the size of the dentry hash table via the printk command. Thanks to this logging, the size of the dentry hash table can
+be obtained via the following command:
+
+    dmesg | grep "Dentry cache"
+
+In the device the course is being done on is as the following:
+
+[0.461843] Dentry cache hash table entries: 1048576 (order: 11, 8388608 bytes, linear)
+
+This means that the table consist of 1048576 entries (buckets). Order: 11 means 2^11 pages are reserved for this hash table. One
+page is 4k (4096) bytes, so there are 2^11 * 4096 bytes (8388608 bytes) reserved for the hash table. Since each element of the table
+holds a pointer and pointers in a 64 bit Linux system are 8 bytes long, the total number of elements in the table can be calculated by
+(2^11) * 4096 / 8, which equates to 1048576 elements.
+
+Pay attention to one point, which is that the length calculation in the paragraph above is the length of the hash table. As dentry
+instances are being created, they are added to this table. With time, the count of the dentry instances may increase and therefore
+occupy a lot of memory. When RAM becomes too full, the kernel can do free operations in some subsystems. This hash table is one of
+those subsystems: As the memory becomes more and more constrained, the kernel removes the unused/rarely used dentry instances from the
+hash table. This way, that memory becomes freed and that memory can be used for other purposes. However, the size of the hash table
+itself is never decreased.
+
+TYPES OF DENTRY INSTANCES IN THE DENTRY CACHE
+=============================================
+Dentry instances in the cache are categorized into three separate groups:
+
+1) The ones that are currently being used (their reference counts are greater than 0)
+2) The ones that aren't currently in use (their reference counts are 0)
+3) Negative dentry instances (the reference count for these are also 0)
+
+Both currently unused dentry instances and negative instances have their reference count set to 0. So what's the difference between the
+two?
+
+The negative dentry instances are instances of directories that doesn't exist. A program might ask for a file that doesn't exist, and
+can even do so repeatedly. In order to be able to quickly complete these requests, the kernel creates dentry instances for those files
+as well. However, since these files aren't in the disc, they don't have inode instances, meaning they don't have entries in the inode
+cache. There might also be permission related issues with accessing a file. Some programs try accessing a file, fails, then try the
+same thing with "sudo" privileges, at which point they succeed. Creating a dentry instance the first time decreases the time for the
+second time.
+
+On the contrary, the dentry instances for files that actually exist in the disc but have reference counts of 0 also have inode instance
+entries in the inode cache.
+
+For example, imagine that a program tries to open the non-existing file "xxx.txt" with O_RDONLY mode. The kernel will still create a
+dentry instance for the directory of that path that is given for "xxx.txt" and put it into dcache. However, there will be no inode
+instance that will be created for that file.
+
+Even when the memory becomes constrained, kernel will never remove dentry instances from the hash table if their reference count is
+greater than zero (aka if they are still being used). So what if there are a lot of entries in dcache that have their reference count
+set to zero? If the kernel decides to free some memory from the hash table entries in this case, it goes with the LRU algorithm, which
+stands for "Least Recently Used". This is just one of the places in the kernel this algorithm is used. The kernel will free entries
+that have been used the least in recent times.
+
+The way this algorithm is implemented is typically by using a linked list. Either the head or the end of the linked list is chosen to
+be the most recently used item. When an item in the middle is used, it is moved to the head or the end of the linked list (depending on
+which is chosen) to indicate that that item is now the most recently used item.
+
+This way, if the head is chosen to be the most recently used item, the end of the linked list will be the item that hasn't been used in
+the longest time. The kernel can then free n amount of items from the end of the linked list and be sure that they haven't been used in
+a while.
+
+Old versions of the kernel used to hold both the negative dentry instances and dentry instances with ref count 0 in the same LRU linked
+list. Starting with kernel v2.6.18, each file system or disc section started to be held in separate LRU linked lists. This is why, in
+modern kernels, this LRU linked list is moved into dcache's superblock struct. This struct is defined as follows and can be found in
+"include/linux/fs.h":
+
+    struct super_block {
+        /* ... */
+        
+        struct list_lru s_dentry_lru;
+        
+        /* ... */
+    };
+
+list_lru struct is defined as follows:
+
+
+    struct list_lru {
+	    struct list_lru_node	*node;
+        #ifdef CONFIG_MEMCG
+        	struct list_head	list;
+        	int			shrinker_id;
+        	bool			memcg_aware;
+        	struct xarray		xa; //Radix array
+        #endif
+
+        #ifdef CONFIG_LOCKDEP
+    	struct lock_class_key	*key;
+    #endif
+    };
+
+As it can be seen, some elements are included in the struct based on some kernel config parameters. list_lru_node struct that is used
+in list_lru is defined as follows:
+
+    struct list_lru_node {
+	    /* global list, used for the root cgroup in cgroup aware lrus */
+	    struct list_lru_one	lru;
+	    atomic_long_t		nr_items;
+    } ____cacheline_aligned_in_smp;
+
+list_lru_one struct inside the list_lru_node struct is implemented as follows:
+
+    struct list_lru_one {
+	    struct list_head	list;
+	    /* may become negative during memcg reparenting */
+	    long			nr_items;
+	    /* protects all fields above */
+	    spinlock_t		lock;
+    };
+
+All three of these structs can be found in "include/linux/list_lru.h".
+
+Why are these structs so complicated? In time, one LRU linked list was created in the dcache in order to handle each bank in the NUMA
+architecture.
+
+WHAT IS NUMA ARCHITECTURE?
+==========================
+Modern PCs and laptops use what's called the SMP (Symmetric Multiprocessing) architecture. In this architecture, the cores in a CPU
+cannot access the RAM at the same time (electrically not possible). They have to access one by one and wait for each other.
+
+In NUMA (Non-uniform Memory Access) architecture, the RAM is divided into what's called "banks" and each CPU core can access one bank
+of RAM at the same time. 
+
+The details of these subjects will be examined later in the course, in the memory management section.
+
+LRU lists in the dcache are held in the dentry struct, via the d_lru element:
+
+    struct dentry {
+       /* ... */
+
+       struct list_head d_lru;
+
+       /* ... */
+    }
+
+Older versions of the kernel didn't have LRU list entries in the dcache for NUMA architecture, therefore it was much simpler. Up until
+the end of v2.6, the LRU list for the dcache was defined in the "fs/dcache.c" as follows:
+
+static LIST_HEAD(dentry_unused);
