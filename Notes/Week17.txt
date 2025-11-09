@@ -1,0 +1,452 @@
+As mentioned last week, dcache uses a LRU algorithm to determine which dentry instances in the cache will be removed when memory needs
+to be freed. However, before freeing the kernel also does some checks instead of freeing blindly. In modern kernels, the controls are
+as follows:
+
+- If the dentry instace is locked, the kernel keeps it in dcache.
+- If the dentry instance is associated with a directory and at least one of the dentries inside the directory is in the dcache, the
+kernel keeps it in cache.
+- Starting with v5 kernels, in order to add resistance to the "thrashing" phenomenon, an "aging" mechanism was added. Each time a timer
+interrupt happens (which is also called a "jiffy" in Linux kernel), the aging count in the d_time member inside the dentry instance is
+increased by 1. If this count is less than a predetermined threshold (let's say 45), the dentry instance isn't removed from the cache,
+even if it is already at the end of the LRU list.
+
+Thrashing: Adding an entry to a cache, then removing it without waiting enough (because the memory became constrained), only to add it
+back again in just a bit. This can be caused by choosing the wrong cache algorithm and negates the benefits of a cache. This can be
+seen
+the most in LFU (Least Frequently Used) algorithms. However, it can also happen in LRU algorithms.
+An LFU algorithm is implemented by checking how many times a given entry is used since it was put into the cache. The entry that is
+used
+the least amount of times is removed.
+
+One question to answer is: Since a newly added entry is going to be at the start of the LRU list, why would thrashing occur? For a
+while
+it was thought that the LRU was completely preventing thrashing. Later, it was discovered that under some circumstances, the dentry
+instance can quickly move towards the end of the list, causing thrashing. Once it was discovered, the aging mechanism was implemented.
+Thrashing will be examined in more detail once we get to the virtual memory subject.
+
+The kernel writes some of the kernel informations into the "proc" file system so that they can be accessed from the user mode. There
+are
+a couple proc files important for the dcache. The following explains those:
+
+- /proc/sys/fs/dentry-state file contains the general state information of the dcache. It is a short file that contains something like
+the following:
+
+	32869	23672	45	0	9093	0
+
+These informations are (respectively):
+    nr_dentry: The total count of the dentry instances
+    nr_unused: The number of unused dentries in the LRU list
+    age_limit: The aging threshold in seconds
+    want_pages: The number of pages to remove from the dcache when memory becomes constrained
+    shrink_list_len: Length of the shrinker list
+    unused_ratio: Unused ratio (in some versions)
+
+
+- /proc/slabinfo is a general file used for holding information about the slab allocation system. Both dentry and inode instances are
+allocated using the slab allocation system. Therefore information about their allocations can be obtained from this file. The following
+command can be used to get information about the dentry allocations:
+
+	$ sudo cat /proc/slabinfo | grep dentry
+
+This command will output something like the following:
+
+	dentry             31239  31983    192   21    1 : tunables    0    0    0 : slabdata   1523   1523      0
+
+What each of these numbers and strings mean are written at the top of /proc/slabinfo:
+
+# name            <active_objs> <num_objs> <objsize> <objperslab> <pagesperslab> : tunables <limit> <batchcount>
+				  <sharedfactor> : slabdata <active_slabs> <num_slabs> <sharedavail>
+
+The slab alocator will be examined later on in the course. active_objs here are the count of allocated and not yet freed dentry
+instances. num_objs (total number of instances) is the total count of objects allocated via the slab allocation system
+
+- /proc/vmstat file contains general important information about the virtual memory mechanism. Some of these informations are related
+to dcache.
+
+- Also, under the "sys" filesystem, there are information about the slab allocation system under the "/sys/kernel/slab/dentry"
+directory. These will be examined in more detail later on.
+
+- "/proc/dentry-state" file contains information about the dcache, which are defined in "fs/dcache.c" of type dentryt_stat_t. This
+struct is defined as the following:
+
+	struct dentry_stat_t {
+		long nr_dentry;
+		long nr_unused;
+		long age_limit;		/* age in seconds */
+		long want_pages;	/* pages requested by system */
+		long nr_negative;	/* # of unused negative dentries */
+		long dummy;			/* Reserved for future use */
+	};
+
+	statuc struct dentry_stat_t dentry_stat = {
+		.age_limit = 45,	
+	};
+
+The data inside this struct is in the "/proc-dentry-state" file. The kernel updates this struct during various operations. The files in
+"proc" and "sys" filesystems aren't real files. When these files are to be read, their corresponding kernel modules (or device drivers)
+required functions are called, which then reads the information in real time and gives the caller the informations.
+
+We won't get into how dentry instances are freed from dcache here. This is primarily a subject related to memory management and will
+be examined when getting into that subject.
+
+Now let's move on to the inode instances.
+
+Every information about a file (all the information that can be obtained via the "stat" function) is actually held on the disk in a
+metadata area. In i-node based filesystems, these informations are held on the disk in an area called "i-node block". Skipping some of
+the details, an i-node based filesystem (such as ext) has 3 regions on the disk:
+
+-super block
+-inode block
+-data block
+
+Each parameter about the metadata areas on the disk are held in the super block. Information about each file is in the i-node block.
+Contents of the files are held in the data block. I-node block consists of i-node elements.
+
+Some of the information held by i-node are the following:
+
+- File type and access rights
+- File's date and tiem information
+- File's user and group id information
+- File's hard link count
+- File size
+- Disk blocks on which the file is held
+
+If the OS is to do an operation on a file, it first needs to access its i-node information. In the i-node block, each i-node has an
+"i-node number", with the first element having 0 as the i-node number. i-node numbers of files can be viewed via the command "ls -i".
+
+There are various details about the i-node based file systems such as ext2, ext3, ext4. These will be examined in more detail later on.
+
+In order to access a file (directories are similar to files as well) Linux kernel accesses the i-node information on the disk for that
+file and creates an inode instance on the memory. These are held in a struct called "inode" in the kernel. It is defined in
+"include/linux/fs.h" as follows:
+
+	struct inode {
+		umode_t			i_mode;
+		unsigned short		i_opflags;
+		kuid_t			i_uid;
+		kgid_t			i_gid;
+		unsigned int		i_flags;
+
+	#ifdef CONFIG_FS_POSIX_ACL
+		struct posix_acl	*i_acl;
+		struct posix_acl	*i_default_acl;
+	#endif
+
+		const struct inode_operations	*i_op;
+		struct super_block	*i_sb;
+		struct address_space	*i_mapping;
+
+	#ifdef CONFIG_SECURITY
+		void			*i_security;
+	#endif
+
+		/* Stat data, not accessed from path walking */
+		unsigned long		i_ino;
+		/*
+		 * Filesystems may only read i_nlink directly.  They shall use the
+		 * following functions for modification:
+		 *
+		 *    (set|clear|inc|drop)_nlink
+		 *    inode_(inc|dec)_link_count
+		 */
+		union {
+			const unsigned int i_nlink;
+			unsigned int __i_nlink;
+		};
+		dev_t			i_rdev;
+		loff_t			i_size;
+		time64_t		i_atime_sec;
+		time64_t		i_mtime_sec;
+		time64_t		i_ctime_sec;
+		u32			i_atime_nsec;
+		u32			i_mtime_nsec;
+		u32			i_ctime_nsec;
+		u32			i_generation;
+		spinlock_t		i_lock;	/* i_blocks, i_bytes, maybe i_size */
+		unsigned short          i_bytes;
+		u8			i_blkbits;
+		enum rw_hint		i_write_hint;
+		blkcnt_t		i_blocks;
+
+	#ifdef __NEED_I_SIZE_ORDERED
+		seqcount_t		i_size_seqcount;
+	#endif
+
+		/* Misc */
+		u32			i_state;
+		/* 32-bit hole */
+		struct rw_semaphore	i_rwsem;
+
+		unsigned long		dirtied_when;	/* jiffies of first dirtying */
+		unsigned long		dirtied_time_when;
+
+		struct hlist_node	i_hash;
+		struct list_head	i_io_list;	/* backing dev IO list */
+	#ifdef CONFIG_CGROUP_WRITEBACK
+		struct bdi_writeback	*i_wb;		/* the associated cgroup wb */
+
+		/* foreign inode detection, see wbc_detach_inode() */
+		int			i_wb_frn_winner;
+		u16			i_wb_frn_avg_time;
+		u16			i_wb_frn_history;
+	#endif
+		struct list_head	i_lru;		/* inode LRU list */
+		struct list_head	i_sb_list;
+		struct list_head	i_wb_list;	/* backing dev writeback list */
+		union {
+			struct hlist_head	i_dentry;
+			struct rcu_head		i_rcu;
+		};
+		atomic64_t		i_version;
+		atomic64_t		i_sequence; /* see futex */
+		atomic_t		i_count;
+		atomic_t		i_dio_count;
+		atomic_t		i_writecount;
+	#if defined(CONFIG_IMA) || defined(CONFIG_FILE_LOCKING)
+		atomic_t		i_readcount; /* struct files open RO */
+	#endif
+		union {
+			const struct file_operations	*i_fop;	/* former ->i_op->default_file_ops */
+			void (*free_inode)(struct inode *);
+		};
+		struct file_lock_context	*i_flctx;
+		struct address_space	i_data;
+		union {
+			struct list_head	i_devices;
+			int			i_linklen;
+		};
+		union {
+			struct pipe_inode_info	*i_pipe;
+			struct cdev		*i_cdev;
+			char			*i_link;
+			unsigned		i_dir_seq;
+		};
+
+
+	#ifdef CONFIG_FSNOTIFY
+		__u32			i_fsnotify_mask; /* all events this inode cares about */
+		/* 32-bit hole reserved for expanding i_fsnotify_mask */
+		struct fsnotify_mark_connector __rcu	*i_fsnotify_marks;
+	#endif
+
+	#ifdef CONFIG_FS_ENCRYPTION
+		struct fscrypt_inode_info	*i_crypt_info;
+	#endif
+
+	#ifdef CONFIG_FS_VERITY
+		struct fsverity_info	*i_verity_info;
+	#endif
+
+		void			*i_private; /* fs or device private pointer */
+	} __randomize_layout;
+
+
+As it can be seen, some of these elements can be added or removed via the kernel config parameter.
+
+This struct was defined as the following in v2.6:
+
+	struct inode {
+		/* RCU path lookup touches following: */
+		umode_t			i_mode;
+		uid_t			i_uid;
+		gid_t			i_gid;
+		const struct inode_operations	*i_op;
+		struct super_block	*i_sb;
+
+		spinlock_t		i_lock;	/* i_blocks, i_bytes, maybe i_size */
+		unsigned int		i_flags;
+		struct mutex		i_mutex;
+
+		unsigned long		i_state;
+		unsigned long		dirtied_when;	/* jiffies of first dirtying */
+
+		struct hlist_node	i_hash;
+		struct list_head	i_wb_list;	/* backing dev IO list */
+		struct list_head	i_lru;		/* inode LRU list */
+		struct list_head	i_sb_list;
+		union {
+			struct list_head	i_dentry;
+			struct rcu_head		i_rcu;
+		};
+		unsigned long		i_ino;
+		atomic_t		i_count;
+		unsigned int		i_nlink;
+		dev_t			i_rdev;
+		unsigned int		i_blkbits;
+		u64			i_version;
+		loff_t			i_size;
+	#ifdef __NEED_I_SIZE_ORDERED
+		seqcount_t		i_size_seqcount;
+	#endif
+		struct timespec		i_atime;
+		struct timespec		i_mtime;
+		struct timespec		i_ctime;
+		blkcnt_t		i_blocks;
+		unsigned short          i_bytes;
+		struct rw_semaphore	i_alloc_sem;
+		const struct file_operations	*i_fop;	/* former ->i_op->default_file_ops */
+		struct file_lock	*i_flock;
+		struct address_space	*i_mapping;
+		struct address_space	i_data;
+	#ifdef CONFIG_QUOTA
+		struct dquot		*i_dquot[MAXQUOTAS];
+	#endif
+		struct list_head	i_devices;
+		union {
+			struct pipe_inode_info	*i_pipe;
+			struct block_device	*i_bdev;
+			struct cdev		*i_cdev;
+		};
+
+		__u32			i_generation;
+
+	#ifdef CONFIG_FSNOTIFY
+		__u32			i_fsnotify_mask; /* all events this inode cares about */
+		struct hlist_head	i_fsnotify_marks;
+	#endif
+
+	#ifdef CONFIG_IMA
+		atomic_t		i_readcount; /* struct files open RO */
+	#endif
+		atomic_t		i_writecount;
+	#ifdef CONFIG_SECURITY
+		void			*i_security;
+	#endif
+	#ifdef CONFIG_FS_POSIX_ACL
+		struct posix_acl	*i_acl;
+		struct posix_acl	*i_default_acl;
+	#endif
+		void			*i_private; /* fs or device private pointer */
+	};
+
+v2.4 and v2.2 defines it as follows:
+
+	struct inode {
+		struct list_head	i_hash;
+		struct list_head	i_list;
+		struct list_head	i_dentry;
+		
+		struct list_head	i_dirty_buffers;
+		struct list_head	i_dirty_data_buffers;
+
+		unsigned long		i_ino;
+		atomic_t		i_count;
+		kdev_t			i_dev;
+		umode_t			i_mode;
+		unsigned int		i_nlink;
+		uid_t			i_uid;
+		gid_t			i_gid;
+		kdev_t			i_rdev;
+		loff_t			i_size;
+		time_t			i_atime;
+		time_t			i_mtime;
+		time_t			i_ctime;
+		unsigned int		i_blkbits;
+		unsigned long		i_blksize;
+		unsigned long		i_blocks;
+		unsigned long		i_version;
+		unsigned short          i_bytes;
+		struct semaphore	i_sem;
+		struct rw_semaphore	i_alloc_sem;
+		struct semaphore	i_zombie;
+		struct inode_operations	*i_op;
+		struct file_operations	*i_fop;	/* former ->i_op->default_file_ops */
+		struct super_block	*i_sb;
+		wait_queue_head_t	i_wait;
+		struct file_lock	*i_flock;
+		struct address_space	*i_mapping;
+		struct address_space	i_data;
+		struct dquot		*i_dquot[MAXQUOTAS];
+		/* These three should probably be a union */
+		struct list_head	i_devices;
+		struct pipe_inode_info	*i_pipe;
+		struct block_device	*i_bdev;
+		struct char_device	*i_cdev;
+
+		unsigned long		i_dnotify_mask; /* Directory notify events */
+		struct dnotify_struct	*i_dnotify; /* for directory notifications */
+
+		unsigned long		i_state;
+
+		unsigned int		i_flags;
+		unsigned char		i_sock;
+
+		atomic_t		i_writecount;
+		unsigned int		i_attr_flags;
+		__u32			i_generation;
+		union {
+			struct minix_inode_info		minix_i;
+			struct ext2_inode_info		ext2_i;
+			struct ext3_inode_info		ext3_i;
+			struct hpfs_inode_info		hpfs_i;
+			struct ntfs_inode_info		ntfs_i;
+			struct msdos_inode_info		msdos_i;
+			struct umsdos_inode_info	umsdos_i;
+			struct iso_inode_info		isofs_i;
+			struct nfs_inode_info		nfs_i;
+			struct sysv_inode_info		sysv_i;
+			struct affs_inode_info		affs_i;
+			struct ufs_inode_info		ufs_i;
+			struct efs_inode_info		efs_i;
+			struct romfs_inode_info		romfs_i;
+			struct shmem_inode_info		shmem_i;
+			struct coda_inode_info		coda_i;
+			struct smb_inode_info		smbfs_i;
+			struct hfs_inode_info		hfs_i;
+			struct adfs_inode_info		adfs_i;
+			struct qnx4_inode_info		qnx4_i;
+			struct reiserfs_inode_info	reiserfs_i;
+			struct bfs_inode_info		bfs_i;
+			struct udf_inode_info		udf_i;
+			struct ncp_inode_info		ncpfs_i;
+			struct proc_inode_info		proc_i;
+			struct socket			socket_i;
+			struct usbdev_inode_info        usbdev_i;
+			struct jffs2_inode_info		jffs2_i;
+			void				*generic_ip;
+		} u;
+	};
+
+And finally, in v0.01 (at which point the name was m_inode) it was defined as:
+
+	struct m_inode {
+		unsigned short i_mode;
+		unsigned short i_uid;
+		unsigned long i_size;
+		unsigned long i_mtime;
+		unsigned char i_gid;
+		unsigned char i_nlinks;
+		unsigned short i_zone[9];
+	/* these are in memory also */
+		struct task_struct * i_wait;
+		unsigned long i_atime;
+		unsigned long i_ctime;
+		unsigned short i_dev;
+		unsigned short i_num;
+		unsigned short i_count;
+		unsigned char i_lock;
+		unsigned char i_dirt;
+		unsigned char i_pipe;
+		unsigned char i_mount;
+		unsigned char i_seek;
+		unsigned char i_update;
+	};
+
+In v0.01, the inode struct used to hold only the basic and foundational informations.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
