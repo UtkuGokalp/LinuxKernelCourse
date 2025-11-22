@@ -1,0 +1,62 @@
+Reminder (hard links and soft links): Hard and soft links are files (that are not really files) that point to other files. Windows'
+shortcut files' equivalent in UNIX/Linux systems is soft links. Hard links are different dentries that point to the same inode. Soft
+links point to different inodes.
+
+In UNIX/Linux systems, in I-node based file systems, treat directories and files the same way. They are both stored on the disk the
+same way. Whether an entry is a file or a directory is determined by a bit in the i_mode element of the inode struct. Over time, in
+order to make searching faster, these informations were added to dentries as well. We can think of a directory as a file that consists
+of dentries:
+
+Contents of a directory file:
+
+dentry
+dentry
+dentry
+...
+
+Remember that each directory has two default subdirectories, . and .. which respectively refers to itself and its parent. So a
+directory, by default, will have two dentries inside it just by existing. The remaining dentries are the other subdirectories that are
+created intentionally.
+
+The term directory file is used here to emphasize the fact that the directories are also stored as files.
+
+Dentries of directory files are not of equal length in i-node based file systems. That's because different files will have different
+names and storing more bytes than necessary for the names would take up too much space.
+
+
+This is declared in "fs/ext4/ext4.h":
+
+    struct ext4_dir_entry_2 {
+        __le32 inode;
+        __le16 rec_len;
+        __u8 name_len;
+        __u8 file_type;
+        char name[]; //Not null-terminated!
+    };
+
+Honestly just check the notes from the teacher's notes, so much stuff happened while the course was going on that I'm sure I cannot
+keep up the notes with the remaining hours now even if I try.
+======================================================================================================================================
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

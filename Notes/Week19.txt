@@ -1,0 +1,125 @@
+HOMEWORKS
+=========
+Register a new filesystem to the kernel (course notes explain how to do this)
+
+WHAT SHOULD BE DONE INSIDE THE FILESYSTEM MOUNT/UNMOUNT FUNCTIONS (BY THE SYSTEMS PROGRAMMER)?
+==============================================================================================
+The mount element of file_system_type struct should have the following signature:
+
+    static struct dentry *custom_mount_func(struct file_system_type *fs_type, int flags, const char *dev_name, void *data)
+    {
+        /**/
+    }
+
+First parameter is the registered file_system_type struct instance's address. sys_mount function checks the file_systems linked list
+and founds this instance using the name previously given to it by the programmer. Other parameters of the function come from the
+sys_mount system function. Remember that when a file is being mounted, a block device file is specified. This block device file is
+given to the 3rd parameter. 2nd parameter is the mount flags. 4th parameter is data specific for the system to be mounted.
+
+The following operations need to be done:
+1) A super_block instance needs to be created and initialized.
+2) And inode instance for the mount root directory needs to be added to the inode cache. The same needs to be done with a dentry and
+dcache.
+3) The function should return via the dentry instance's address related to the mount root directory.
+
+An inode cache entry for the root of the filesystem to be mounted and a dcache entry should be created in this function and put into
+the caches. Then the dentry needs to be returned.
+
+In modern kernels, a function called d_make_root is implemented and exported. This function creates the dentry corresponding to a
+given inode instance.
+
+mount_bdev and mount_nodev functions return with the dentry instance inside s_root element of the the super_block struct, which was
+set via the fill_super callback (fill_super callback is explained later in this week's notes).
+
+How is the super_block instance created? In Linux kernel, the creation of the super_block instance for a given file system can be done
+via a higher level function provided by the kernel. Two of these functions are mount_nodev and mount_bdev:
+
+    struct dentry *mount_nodev(struct file_system_type *fs_type, int flags, void *data,
+                               int (*fill_super)(struct super_block *, void *, int));
+
+    struct dentry *mount_nodev(struct file_system_type *fs_type, int flags, const char *dev_name, void *data,
+                               int (*fill_super)(struct super_block *, void *, int));
+
+mount_nodev are used for file systems that are not based on a disk, such as ramdisk. mount_bdev are used for file systems that are
+based on a disk.
+
+These two functions are also exported and therefore can be used when writing device drivers.
+
+The kernel holds the super block instances in the file_system_type struct's fs_super element, which is an element of a linked list. So
+for each file system, there are disk areas whose super_block struct (obtained after mounting operation) are held in the 
+
+    struct super_block {
+        /*...*/
+        struct hlist_head fs_supers;
+        struct list_head s_list;
+        /*...*/
+    };
+
+super_block struct's s_list element hold the nodes of this linked list. Linux kernel also holds all the super_block instances in the
+linked list called super_blocks:
+
+    static LIST_HEAD(super_blocks);
+
+An example use:
+
+    static struct dentry *myfs_mount(struct file_system_type *fs_type, int flags, const char *dev_name, void *data)
+    {
+        return mount_bdev(fs_type, flags, dev_name, data, myfs_fill_super);
+    }
+
+Notice that except for myfs_fill_super, each parameter is directly passed into mount_bdev. myfs_fill_super is a callback function that
+fills the superblock structs with data. This data is specific to the file system and therefore needs to be filled by the programmer.
+
+mount_bdev roughly does the following:
+1) Uses dev_name parameter and the device file in order to access the block device driver.
+2) Check if there is a superblock instance previously created for this disk section and creates the superblock instance if there isn't
+one.
+3) Initializes s_bdev and s_dev elements of the created superblock instances, effectively linking the block device to the super block
+instance.
+4) Calls the fill_super callback given by the programmer.
+
+mount_nodev does more or less the same thing but since there are no block devices, some steps are performed differently.
+
+Notice that the custom mount function returns with the return value of mount_bdev or mount_nodev.
+
+So how are the inode and dentry instances for the root of the mount (mount point) created?
+These are created in the fill_super function by the systems programmer. In the fill_super function, the programmer needs to initialize
+the following (at least):
+
+ - s_magic should be given a magic number value that describes the file system.
+ - s_ops should be given the operations that can be performed on superblocks. This is a struct that consists of function pointers.
+ The programmer can fill in only the required functions (there are a lot of function pointers in that struct).
+   - s_blocksize inside s_ops should hold the size of a single block in the file system. s_blocksize_bits should hold that value
+   represented as 2**s_blocksize_bits. The kernel also provides a function called sb_set_blocksize that is used to set these elements.
+ - s_fs_info should be set to point to the starting address of the struct that holds the super block information of the file system.
+
+To summarize:
+
+sys_mount --> call mount inside file_system_type --> mount_bdev --> create superblock and call fill_super --> create inode and dentry
+instances for the mount point inside fill_super
+
+Up to this point mounting a file system was explained. So what if we want to cd into the mount point and make file operations, such as
+creating a new file? The programmer needs to write functions that perform these operations.
+
+Linux's file system is called a "virtual file system". This name was given after the virtual functions in OOP. Virtual functions in
+OOP are achieved by calling functions that were placed in a known address beforehand (such as C++'s virtual function table).
+
+Similarly, in Linux's virtual file system, the file operations that won't change are embedded inside the kernel. The operations that
+can change based on the file system are treated like the virtual functions in OOP languages - the function pointers are passed into
+the kernel and the kernel calls the functions at the function pointers in runtime. Since C isn't an OOP language, this mechanism needs
+to be created manually in C.
+
+When writing a filesystem, the related operations of that filesystem are put into functions, and the pointers to those functions are
+given to the kernel. This way, the kernel can call the appropriate functions when it needs to do something with the files in that
+filesystem.
+
+
+
+
+
+
+
+
+
+
+

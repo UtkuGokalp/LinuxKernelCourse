@@ -10,6 +10,11 @@ interrupt happens (which is also called a "jiffy" in Linux kernel), the aging co
 increased by 1. If this count is less than a predetermined threshold (let's say 45), the dentry instance isn't removed from the cache,
 even if it is already at the end of the LRU list.
 
+CORRECTION FROM NEXT WEEK: In modern kernels (idk the versions) the kernel doesn't use the aging mechanism. When shrinking (which is
+removing dentry instances from dcache under memory constraint conditions), the kernel checks the DCACHE_REFERENCED bit of d_flags
+inside dentry struct. If that bit is 0, the instance is freed. If not, the instance is brought to the beginning of the dcache and its
+DCACHE_REFERENCED bit is set to 0.
+
 Thrashing: Adding an entry to a cache, then removing it without waiting enough (because the memory became constrained), only to add it
 back again in just a bit. This can be caused by choosing the wrong cache algorithm and negates the benefits of a cache. This can be
 seen
@@ -433,20 +438,3 @@ And finally, in v0.01 (at which point the name was m_inode) it was defined as:
 	};
 
 In v0.01, the inode struct used to hold only the basic and foundational informations.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
