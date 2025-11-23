@@ -113,13 +113,279 @@ When writing a filesystem, the related operations of that filesystem are put int
 given to the kernel. This way, the kernel can call the appropriate functions when it needs to do something with the files in that
 filesystem.
 
+Some of the functions in the super_operation struct (which exists inside the super_block struct) are given below:
+ - alloc_inode is called when the kernel wants to allocate an inode in a filesystem of the given superblock
+ - free_inode is called when the kernel wants to free a previously allocated inode
 
+Kernel also have a default built-in function for the operations in super_operation. If the programmer leaves the function pointers NULL
+the kernel uses these default ones. Check the following code taken from kernel (v6.17.8 in "fs/inode.c"):
 
+	struct inode *alloc_inode(struct super_block *sb)
+	{
+		const struct super_operations *ops = sb->s_op;
+		struct inode *inode;
 
+		if (ops->alloc_inode) //Check if the function pointer is NULL
+			inode = ops->alloc_inode(sb);
+		else
+			inode = alloc_inode_sb(sb, inode_cachep, GFP_KERNEL); //Call the default function if no callback is provided
 
+		if (!inode)
+			return NULL;
 
+		if (unlikely(inode_init_always(sb, inode))) {
+			if (ops->destroy_inode) {
+				ops->destroy_inode(inode);
+				if (!ops->free_inode)
+					return NULL;
+			}
+			inode->free_inode = ops->free_inode;
+			i_callback(&inode->i_rcu);
+			return NULL;
+		}
 
+		return inode;
+	}
 
+Notice that the kernel first checks if the function pointer is NULL. If not, it uses the function pointer to allocate an inode.
+Otherwise, it falls back to the kernel's default inode allocation function, which is called alloc_inode_sb.
 
+So what do we need to do if we want to write a filesystem? Here is the answer step by step:
+ - A file_system_type struct instance is created and registered to the global linked list using register_file_system().
+ - mount and sb_kill elements of the file_system_type instance need to be initialized. The custom mount function generally uses the
+ built-in mount_bdev() function, which creates a super_block instance but doesn't fill its elements except for a few of them. In order
+ to fill the super_block instance, fill_super callback given by the programmer is used.
+ - When the file system is mounted, sys_mount finds this filesystem from the global linked list and mounts it using the mount function
+ supplied in the previous step.
+ - fill_super function needs to fill the super_block instance based on the requirements of the file system. In order to achieve this,
+ the programmer needs to read the metadata information on the disk for the filesystem. This metadata information is used in other
+ operations as well. Therefore, it is a good idea to store filesystem metadata in a custom struct instead of reading from the disk each
+ time. This custom struct is then placed into kernel's super_block struct:
 
+    struct super_block {
+        /* ... */
+        void *s_fs_info; /*Filesystem private info*/
+        /* ... */
+    };
 
+ - The fill_super callback needs to fill the super_block elements. But it also needs to create the inode and dentry instances for the
+ root of the filesystem and put them into super_block's s_root element. At this point, kernel can reach the inode and dentry instances
+ for the root of the mounted filesystem.
+ - Remember that inode and dentry structs have inode_operations and dentry_operations, which has function pointers that are used when
+ operations need to be done on dentries or inodes.
+
+At this point, the filesystem can be mounted and the user can cd into it. Now what if the user wants to create a new directory in the
+mounted filesystem?
+
+This is done by "sys_mkdir" function, which eventually calls "vfs_mkdir" function. The implementation of this function is as follows:
+
+	struct dentry *vfs_mkdir(struct mnt_idmap *idmap, struct inode *dir,
+			 struct dentry *dentry, umode_t mode)
+	{
+		int error;
+		unsigned max_links = dir->i_sb->s_max_links;
+		struct dentry *de;
+
+		error = may_create(idmap, dir, dentry);
+		if (error)
+			goto err;
+
+		error = -EPERM;
+		if (!dir->i_op->mkdir)
+			goto err;
+
+		mode = vfs_prepare_mode(idmap, dir, mode, S_IRWXUGO | S_ISVTX, 0);
+		error = security_inode_mkdir(dir, dentry, mode);
+		if (error)
+			goto err;
+
+		error = -EMLINK;
+		if (max_links && dir->i_nlink >= max_links)
+			goto err;
+
+		de = dir->i_op->mkdir(idmap, dir, dentry, mode);
+		error = PTR_ERR(de);
+		if (IS_ERR(de))
+			goto err;
+		if (de) {
+			dput(dentry);
+			dentry = de;
+		}
+		fsnotify_mkdir(dir, dentry);
+		return dentry;
+
+	err:
+		dput(dentry);
+		return ERR_PTR(error);
+	}
+
+The implementation can be found in "fs/namei.c". Here you can see that the mkdir function of the inode for the parent directory (the
+directory in which the new directory will be created) is called. If this isn't implemented (if the function pointer is NULL), the
+function returns an error (with a value of -EPERM) and a new directory cannot be created.
+
+This means that the programmer needs to create an inode_operations struct instance and put that into root inode's i_op element. However
+not each inode needs a separate inode_operations struct. A single inode_operations struct is created and all inodes' i_op element point
+to this single struct.
+
+Take note of the return value of the inode's mkdir function. This function creates the directory and the directory's inode and dentry
+instances, then returns the dentry instance.
+
+So what about creating a file and make operations on that file in the filesystem's root directory? What happens in the background?
+What the kernel does when a file is opened was examined previously. The kernel first allocates a file descriptor, then creates a file
+instance and fills it with data. So when and how are file_operations element of the file instance (aka instance of struct file) used?
+
+When file operations are being done, the kernel calls the functions in the file_operations struct at the appropriate places. The
+mechanism works just like the super block operations explained above. And again, just like super block operations, not every single
+operation element needs to be filled. For example, character device driver's in Linux indirectly changes the f_op element of the file
+struct and calls their own functions when file operations are being done.
+
+However, when filesystems are being implemented,the programmer needs to put the file_operations into i_fop element, which the kernel
+then puts into the f_op element.
+
+We can try to make our own basic filesystem at this point. To do this, Linux's device drivers called "loopback" devices can be used.
+The loopback device allow us to use a single file like an entire disk.
+
+Device files related to loop device drivers are found under /dev/:
+
+	$ ls /dev/loop* -l
+	Permissions   Size User Date Modified Name
+	brw-rw----     7,0 root 23 Nov 12:07  /dev/loop0
+	brw-rw----     7,1 root 23 Nov 12:07  /dev/loop1
+	brw-rw----     7,2 root 23 Nov 12:07  /dev/loop2
+	brw-rw----     7,3 root 23 Nov 12:07  /dev/loop3
+	brw-rw----     7,4 root 23 Nov 12:07  /dev/loop4
+	brw-rw----     7,5 root 23 Nov 12:07  /dev/loop5
+	brw-rw----     7,6 root 23 Nov 12:07  /dev/loop6
+	brw-rw----     7,7 root 23 Nov 12:07  /dev/loop7
+	brw-rw----     7,8 root 23 Nov 12:07  /dev/loop8
+	brw-rw----     7,9 root 23 Nov 12:07  /dev/loop9
+	brw-rw----    7,10 root 23 Nov 12:07  /dev/loop10
+	brw-rw----    7,11 root 23 Nov 12:07  /dev/loop11
+	brw-rw----    7,12 root 23 Nov 12:07  /dev/loop12
+	brw-rw----    7,13 root 23 Nov 12:07  /dev/loop13
+	brw-rw----    7,14 root 23 Nov 12:07  /dev/loop14
+	brw-rw----    7,15 root 23 Nov 12:07  /dev/loop15
+	brw-rw----    7,16 root 23 Nov 12:07  /dev/loop16
+	brw-rw----    7,17 root 23 Nov 12:07  /dev/loop17
+	brw-rw----    7,18 root 23 Nov 12:07  /dev/loop18
+	brw-rw----    7,19 root 23 Nov 12:07  /dev/loop19
+	brw-rw----    7,20 root 23 Nov 12:07  /dev/loop20
+	brw-rw----    7,21 root 23 Nov 12:07  /dev/loop21
+	brw-rw----    7,22 root 23 Nov 12:07  /dev/loop22
+	brw-rw----    7,23 root 23 Nov 12:07  /dev/loop23
+
+In this system, there are 24 loop devices with the same major number (7) and different minor numbers (0-23). In order to prepare a loop
+device to be used, first the file to be used need to be created. In Linux, the "dd (disk dump)" command line utility can be used to
+create a file filled with zeros with the following command:
+
+    $ dd if=/dev/zero of=disk.dat bs=512 count=20480
+
+if: input file
+of: output file
+bs: block size (512 bytes by default)
+count: number of blocks to be copied (if not specified, copying is done until the end of input file is reached)
+
+Upon running this command, we will have a file filled with zeros, called disk.dat and is of ~10MB in size. In order to use this file as
+a disk, "losetup" command utility can be used:
+
+	$ sudo losetup /dev/loop0 disk.dat
+
+Make sure to use a loop device that is not already under the /dev/ directory. If the last loop device is loop23 (as shown in the output
+above), use losetup with /dev/loop24.
+
+Upon running this command, disk.dat can be used as a disk and is recognized by lsblk:
+
+	$ lsblk
+
+	NAME        MAJ:MIN RM   SIZE RO TYPE MOUNTPOINTS
+	...
+	loop24        7:24   0    10M  0 loop 
+	...
+
+Let's format this disk with ext2:
+
+	$ sudo mkfs.ext2 /dev/loop24
+
+Now that loop24 is formatted, it can be mounted. Note that the mount point can be inside a directory as well, however note that if that
+is the case, the contents of that directory cannot be accessed until the loop device is unmounted.
+
+	$ mkdir ext2-test
+	$ sudo mount /dev/loop24 ext2-test/
+
+Now ext2-test/ directory has its own filesystem and allows us to access inside disk.dat:
+
+	$ ls ext2-test/
+	Permissions Size User Date Modified Name
+	drwx------     - root 23 Nov 12:43  lost+found
+
+So now that we've done this, how do we revert our changes?
+
+First unmount should be done:
+
+	$ sudo umount ext2-test
+
+Instead of ext2-test, the loop device (loop24) can also be used.
+Next, the loop device needs to be unlinked from disk.dat:
+
+	$ sudo losetup -d /dev/loop24
+
+The -d flag stands for detach. At this point, lsblk shouldn't show our file as the disk and the loop device file should be removed from
+/dev/ directory.
+
+disk.dat isn't removed. This can either be removed manually or linked to a loopback device again to keep working on it. It's contents
+will stay the same, meaning you can keep working on it from where you left off.
+
+In order to not have to use sudo in these commands all the time, "chown" command can be used to change the owner to the current user.
+(changing the ownership of the mount point is the one that works? I think?)
+
+This was how to use a loopback device as a disk. Now let's move on to making our own file system instead of formatting the loop device
+as ext2. Note that this will require some kernel stuff that we haven't gone over yet.
+
+In order to design a file system from scratch, first the disk organization of this file system needs to be determined. Each file system
+has a metadata section and a data section. The metadata section holds the information about file system's parameters and important
+sections. The data section is the part that holds the information inside the files.
+
+File systems we use today evolved and improved over time, resulting in the ones we use today. This means that implementing an ext4 or a
+FAT32 (or similar) file system requires time and effort. The file system we will implement here is going to be a very minimalistic
+without many details to it. This file system is one that was developed for the sole purpose of using in this course as an example. It
+is not used anywhere else.
+
+This file system will be called "simple fs". The disk organization of this file system is as follows:
+
+╔════════════════════╦════════════════════╗
+║    BLOCK NUMBER    ║     BLOCK TYPE     ║
+╠════════════════════╬════════════════════╣
+║      0             ║    SUPER BLOCK     ║ 1 block  ( 4096 bytes)
+╠════════════════════╬════════════════════╣
+║     1-4            ║    INODE BLOCK     ║ 4 blocks (16384 bytes,    can change)
+╠════════════════════╬════════════════════╣
+║      5             ║   ROOT DIR BLOCK   ║ 1 block  ( 4096 bytes, cannot change)
+╠════════════════════╬════════════════════╣
+║                    ║                    ║
+║                    ║                    ║
+║  5-Remaining       ║     DATA BLOCK     ║ However many bytes are left, must be at least 1024 * 4096 - 6 * 4096 = 4,169,728 bytes
+║                    ║                    ║
+║                    ║                    ║
+╚════════════════════╩════════════════════╝
+
+The block size in this filesystem can be changed (during formatting), but the default will be 4096 bytes (8 sectors).
+
+The biggest file in this file system can be a single block, which is 4096 bytes. When this restriction is in place, we don't need to
+store the places of a given file's blocks. Just storing the block number of a file will be enough. Blocks that are the contents of a
+file will be stored in the Data Block.
+
+In this file system, the root directory's place and size is predefined. The root directory is always at block number 5 and occupies a
+single block of space.
+
+The superblock information is as follows:
+
+╔══════════════════════════════════════════════════════════════════╗
+║ BLOK 0: SUPER BLOCK (4096 bytes)                                 ║
+╠══════════════════════════════════════════════════════════════════╣
+║ magic:              0x53494D50  ("SIMP")                         ║
+║ block_size:         4096                                         ║
+║ inode_count:        1024                                         ║
+║ data_block_count:   e.g. 2557                                    ║
+║ free_inodes:        e.g. 1023                                    ║
+║ free_blocks:        e.g. 2556                                    ║
+╚══════════════════════════════════════════════════════════════════╝
