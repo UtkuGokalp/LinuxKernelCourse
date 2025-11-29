@@ -1,0 +1,83 @@
+Most of this week is about implementing the file system and there will be a lot of codes. I will not take notes for most of the stuff
+this week.
+
+There are typedefs that exist in Linux kernel (include/linux/types.h) to specify type and bit length:
+
+	//The __ prefix is to specify that these are lower level typedefs
+	//and their use in higher level implementations are discouraged.
+	typedef unsigned char 		__u8;
+	typedef signed char 		__s8;
+	typedef unsigned short 		__u16;
+	typedef signed short 		__s16;
+	typedef unsigned int 		__u32;
+	typedef signed int 			__s32;
+	typedef unsigned long long 	__u64;
+	typedef signed long long 	__s64;
+
+	typedef u8 					__u8;
+	typedef s8 					__s8;
+	typedef u16 				__u16;
+	typedef s16 				__s16;
+	typedef u32 				__u32;
+	typedef s32 				__s32;
+	typedef u64 				__u64;
+	typedef s64 				__s64;
+
+	typedef unsigned long 		ulong;
+	typedef unsigned int 		uint;
+	typedef unsigned short 		ushort;
+
+Which typedef corresponds to which C type changes between versions, however the part that is actually used in code (i.e. u8, u16 etc.)
+are consistent.
+
+The typedefs that relate to endiannes are defined in "include/uapi/linux/types.h" as follows:
+
+	typedef __u16 __bitwise __le16;
+	typedef __u16 __bitwise __be16;
+	typedef __u32 __bitwise __le32;
+	typedef __u32 __bitwise __be32;
+	typedef __u64 __bitwise __le64;
+	typedef __u64 __bitwise __be64;
+
+Notice that unsigned integer types do not exist here.
+
+The types in <stdint.h> that was added with C99 (int8_t, uint8_t etc.) are NOT used in Linux kernel. This is because standard C is not
+used in the kernel. That's why the typedefs mentioned above need to be used in the kernel.
+
+
+Round up operation:
+
+((int)((Number to round up + round up base - 1) / round up base)) * round up base
+
+Let's say we want to round 7 and take the base as 4. This means we want round 7 up to 8. Similarly, if it was 9, the round up would be
+to 12 and so on.
+
+Here's how to operation goes:
+
+7 + 4 - 1 = 10
+10 / 4 = 2.5
+(int)2.5 gives us 2
+2 * 4 = 8
+So we round 7 up to 8.
+
+Let's make 9 to 12:
+
+9 + 4 - 1 = 12
+12 / 4 = 3
+(int)3 = 3
+3 * 4 = 12
+So we round 9 up to 12.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
